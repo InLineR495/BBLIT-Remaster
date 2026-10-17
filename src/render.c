@@ -20,6 +20,7 @@
 #include "window.h"
 #include "edges.h"
 #include "pacer.h"
+#include "hud_policy.h"
 #include <math.h>
 #include <stddef.h>
 
@@ -2409,11 +2410,23 @@ static int hud_root(int i)
     return i;
 }
 
-static void hud_scan(const struct bb_snapshot *b)
+static int hud_gameplay(void)
+{
+    uint32_t ram = *(volatile uint32_t *)(uintptr_t)0x52fd00u;
+    if (!ram)
+        return 0;
+    uint32_t level = *(volatile uint32_t *)(uintptr_t)(ram + 0x10000);
+    return bb_hud_gameplay(level, *(volatile uint8_t *)(uintptr_t)0x4b226cu);
+}
+
+static void hud_scan(const struct bb_snapshot *b, int gameplay)
 {
     uint32_t n = 0;
     memset(hud_anchor, 0, b->nprims);
-    if (!bb_cfg.hud_edges || hud_k >= 0.999)
+    // Save-slot labels and pause-menu rows can occupy the same screen bands
+    // as HUD counters. They belong to their centred menu panel, so never
+    // anchor individual menu rows to the widescreen edges.
+    if (!gameplay || !bb_cfg.hud_edges || hud_k >= 0.999)
         return;
     for (uint32_t i = 0; i < b->nprims && n < 2048; i++) {
         const struct bb_prim *p = &b->prims[i];
@@ -2443,20 +2456,24 @@ static void hud_scan(const struct bb_snapshot *b)
             }
         }
     static float cb[2048][4];
+    static uint8_t has_icon[2048];
+    memset(has_icon, 0, n);
     for (uint32_t i = 0; i < n; i++)
         cb[i][0] = cb[i][2] = 9, cb[i][1] = cb[i][3] = -9;
     for (uint32_t i = 0; i < n; i++) {
         int r = hud_root((int)i);
         cb[r][0] = fminf(cb[r][0], hud_box[i][0]); cb[r][1] = fmaxf(cb[r][1], hud_box[i][1]);
         cb[r][2] = fminf(cb[r][2], hud_box[i][2]); cb[r][3] = fmaxf(cb[r][3], hud_box[i][3]);
+        uint8_t tag = b->verts[b->prims[hud_idx[i]].first].tag;
+        has_icon[r] |= tag == BB_TAG_HUD3D || tag == BB_TAG_BB || tag == BB_TAG_HUDBAR;
     }
     for (uint32_t i = 0; i < n; i++) {
         int r = hud_root((int)i);
-        int band = cb[r][2] > 0.45f || cb[r][3] < -0.45f;
-        if (band && cb[r][1] < -0.25f) {
+        int edge = bb_hud_edge(cb[r][0], cb[r][1], cb[r][2], cb[r][3], has_icon[r]);
+        if (edge == 1) {
             hud_anchor[hud_idx[i]] = 1;
             p29_left++;
-        } else if (band && cb[r][0] > 0.25f) {
+        } else if (edge == 2) {
             hud_anchor[hud_idx[i]] = 2;
             p29_right++;
         }
@@ -2801,15 +2818,18 @@ static void pu_shift(const float *in, const struct bb_snapshot *s, const double 
 static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
 {
     static int hud_was = -1;
+    static int hud_gameplay_was = -1;
+    int gameplay = hud_gameplay();
     static double hud_k_was;
     if (gpu_gen == pair_gen && gpu_trans_mode == (unsigned)bb_cfg.trans_mode && hud_was == bb_cfg.hud_edges &&
-        hud_k_was == hud_k)
+        hud_k_was == hud_k && hud_gameplay_was == gameplay)
         return;
     gpu_gen = pair_gen;
     gpu_trans_mode = (unsigned)bb_cfg.trans_mode;
     hud_was = bb_cfg.hud_edges;
+    hud_gameplay_was = gameplay;
     hud_k_was = hud_k;
-    hud_scan(b);
+    hud_scan(b, gameplay);
     title_scan(b);
     dc_scan(b);
     pu_compute(b);

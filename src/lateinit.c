@@ -38,6 +38,7 @@ void bb_config_load(void)
     bb_cfg.veh = GetPrivateProfileIntA("remaster", "veh", 1, ini);
     bb_cfg.probes = GetPrivateProfileIntA("remaster", "probes", 1, ini);
     bb_cfg.borderless = GetPrivateProfileIntA("remaster", "borderless", 1, ini);
+    bb_cfg.splash_fill = GetPrivateProfileIntA("remaster", "splash_fill", 1, ini);
     bb_cfg.pacer_sleep = GetPrivateProfileIntA("remaster", "pacer_sleep", 1, ini);
     bb_cfg.video_guard = GetPrivateProfileIntA("remaster", "video_guard", 1, ini);
     bb_cfg.render = GetPrivateProfileIntA("remaster", "render", 1, ini);

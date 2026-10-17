@@ -4,6 +4,7 @@
 // Если хост не эталонный 1.6 или REMASTER_OFF — только проброс DirectDraw в системную ddraw.
 #include <windows.h>
 #include <stdint.h>
+#include <string.h>
 #include "hook.h"
 #include "log.h"
 #include "remaster.h"
@@ -46,9 +47,26 @@ HRESULT WINAPI proxy_DirectDrawEnumerateA(void *cb, void *ctx)
     return real_DirectDrawEnumerateA ? real_DirectDrawEnumerateA(cb, ctx) : E_FAIL;
 }
 
+// Windows d3dim.dll imports these functions from the module named ddraw.dll.
+// Forward to the real implementation even when an unsupported host disables
+// the remaster. A tail jump preserves the undocumented entry points' ABI.
+FARPROC bb_ddraw_export(const char *name)
+{
+    load_real_ddraw();
+    FARPROC fn = real_ddraw ? GetProcAddress(real_ddraw, name) : NULL;
+    if (!fn) {
+        bb_log("ddraw: required system export %s is unavailable", name);
+        ExitProcess(ERROR_PROC_NOT_FOUND);
+    }
+    return fn;
+}
+
 // Эталон 1.6: база 0x400000, маркер версии и CRC32 .text (маркер не отличает hpRT, CRC отличает).
 static int host_is_reference(void)
 {
+    uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_SECTION_HEADER *sections = IMAGE_FIRST_SECTION(nt);
     uint64_t v = 0;
     SIZE_T got = 0;
     uint32_t crc;
@@ -57,13 +75,36 @@ static int host_is_reference(void)
         bb_log("host: база %p, не 0x400000", (void *)GetModuleHandleA(NULL));
         return 0;
     }
+    // Other editions may have a different layout. Report their actual code
+    // fingerprint even when the reference version marker does not match.
+    // All existing acceptance checks below remain required.
+    bb_log("host: PE timestamp=%08lx image_size=%08lx entry=%08lx",
+           (unsigned long)nt->FileHeader.TimeDateStamp,
+           (unsigned long)nt->OptionalHeader.SizeOfImage,
+           (unsigned long)(BB_IMAGE_BASE + nt->OptionalHeader.AddressOfEntryPoint));
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+        IMAGE_SECTION_HEADER *s = &sections[i];
+        if (memcmp(s->Name, ".text\0\0\0", IMAGE_SIZEOF_SHORT_NAME) != 0)
+            continue;
+        if (s->VirtualAddress > nt->OptionalHeader.SizeOfImage ||
+            s->SizeOfRawData > nt->OptionalHeader.SizeOfImage - s->VirtualAddress)
+            break;
+        bb_log("host: actual .text VA=%08lx raw_size=%08lx CRC32=%08x",
+               (unsigned long)(BB_IMAGE_BASE + s->VirtualAddress),
+               (unsigned long)s->SizeOfRawData,
+               bb_crc32(base + s->VirtualAddress, s->SizeOfRawData));
+        break;
+    }
     if (!ReadProcessMemory(GetCurrentProcess(), (void *)BB_VERSION_ADDR, &v, sizeof v, &got) || got != sizeof v
         || v != BB_VERSION_1_6) {
+        bb_log("host: reference marker @%08x: read=%lu bytes, value=%016llx (expected %016llx)",
+               BB_VERSION_ADDR, (unsigned long)got,
+               (unsigned long long)v, (unsigned long long)BB_VERSION_1_6);
         bb_log("host: маркер версии 1.6 не найден");
         return 0;
     }
     crc = bb_crc32((const void *)BB_TEXT_VA, BB_TEXT_SIZE);
-    bb_log("host: bugs.exe 1.6, CRC32 .text = %08x (эталон %08x)", crc, BB_TEXT_CRC32);
+    bb_log("host: %s, CRC32 .text = %08x (эталон %08x)", BB_HOST_NAME, crc, BB_TEXT_CRC32);
     return crc == BB_TEXT_CRC32;
 }
 

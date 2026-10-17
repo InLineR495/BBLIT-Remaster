@@ -4,6 +4,7 @@
 #define BB_VERSION "1.0-beta"
 
 struct bb_config {
+    int splash_fill; // extend uniform startup-logo backgrounds into the bars
     int off;        // REMASTER_OFF=1 или off=1 в ini: только прокси ddraw, игра не трогается
     int log_gpa;    // писать в лог каждый GetProcAddress
     int veh;        // логировать исключения (AV и т. п.), обработку не меняет

@@ -16,6 +16,7 @@
 #include "mark.h"
 #include "render.h"
 #include "window.h"
+#include "splash.h"
 
 #define POOL_BASE  0x734de0u
 #define POOL_END   0x7bd960u     // 35 000 × 16
@@ -426,6 +427,8 @@ static BOOL WINAPI w_wglSwapBuffers(HDC dc)
         st.swaps_skipped++;
         return TRUE;
     }
+    if (bb_cfg.splash_fill && bb_cfg.borderless && bb_cfg.render && !latest)
+        bb_splash_fill();
     QueryPerformanceCounter(&t0);
     BOOL ok = r_wglSwapBuffers(dc);
     QueryPerformanceCounter(&t1);
