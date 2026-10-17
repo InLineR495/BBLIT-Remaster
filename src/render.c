@@ -2036,6 +2036,8 @@ static void hud_scan(const struct bb_snapshot *b)
 // 85 %: логотип −1836…−1802 перед машиной (её ближние части −1916…−2062), панель −1700 — за Багзом (−1200…−1290,
 // кончики ушей заходят на рамку панели; при 60 % панель закрывала бы их).
 // Плашка: актор из 4–64 вершин, разброс z < 3 %, шире 0,5 экрана. Замер 2026-10-17 (снимок кадра меню).
+// Цвет вершин плашек ПК ставит 1,0 — нейтраль PS1, как спрайтам: множитель ps1_light выжигал логотип в сплошной
+// жёлтый и белый (пользователь, 2026-10-17), поэтому плашки идут с флагом спрайта при любом title_logo.
 #define TITLE_MAX 8
 static uint32_t title_objs[TITLE_MAX], title_n;
 
@@ -2052,7 +2054,7 @@ static void title_scan(const struct bb_snapshot *b)
     uint32_t ram = *(volatile uint32_t *)(uintptr_t)0x52fd00u, tried[64], ntried = 0;
     static uint32_t logged_n, logged_sum;
     title_n = 0;
-    if (bb_cfg.title_logo <= 0 || bb_cfg.title_logo >= 100 || !ram || *(volatile uint32_t *)(uintptr_t)(ram + 0x10000) != 0)
+    if (!ram || *(volatile uint32_t *)(uintptr_t)(ram + 0x10000) != 0)
         return;
     for (uint32_t i = 0; i < b->nprims && title_n < TITLE_MAX; i++) {
         const struct bb_vert *v0 = &b->verts[b->prims[i].first];
@@ -2089,7 +2091,7 @@ static void title_scan(const struct bb_snapshot *b)
     if (title_n != logged_n || sum != logged_sum) {
         logged_n = title_n;
         logged_sum = sum;
-        bb_log("титул: плашек ближе к камере %u (глубина ×%d%%)", title_n, bb_cfg.title_logo);
+        bb_log("титул: плашек %u (глубина ×%d%%, без ps1_light)", title_n, bb_cfg.title_logo);
     }
 }
 
@@ -2427,7 +2429,8 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
             } else {
                 memcpy(g->pa, g->pb, sizeof g->pa);
             }
-            if (world && title_n && title_has(v->obj)) {      // плашки титула — ближе к камере
+            int plate = world && title_n && title_has(v->obj);
+            if (plate && bb_cfg.title_logo > 0 && bb_cfg.title_logo < 100) {   // плашки титула — ближе к камере
                 g->pa[2] *= (float)bb_cfg.title_logo / 100.0f;
                 g->pb[2] *= (float)bb_cfg.title_logo / 100.0f;
             }
@@ -2446,7 +2449,7 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
                 g->sz[1] = (float)((-2.0 * w[2] - (o[5] + o[4])) / (o[5] - o[4]));
                 g->sz[0] = (float)((-2.0 * ub[2] - (o[5] + o[4])) / (o[5] - o[4]));
             }
-            g->flags[2] = v->tag == BB_TAG_BB;   // спрайт: цвет 1.0 = нейтраль PS1
+            g->flags[2] = v->tag == BB_TAG_BB || plate;   // спрайт и плашка титула: цвет 1.0 = нейтраль PS1
             g->flags[3] = (uint8_t)((world && v->fl & BB_VF_NOFOG) | (list == 4) << 1);   // 1 — без тумана, 2 — тень
             g->fade = world ? fd_fade(b, v) : 1.0f;
             if (world) {
