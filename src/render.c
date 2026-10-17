@@ -1533,6 +1533,90 @@ static uint32_t gidx[BB_SNAP_MAX_PRIMS * 6];
 static struct gpu_cmd gcmd[NLIST][BB_SNAP_MAX_PRIMS];
 static uint32_t gncmd[NLIST];
 
+// --- Наклейки на земле ---
+// Нора в LS01 (актор 034a6db4, текстуры 434/435, 32 вершины) — неглубокая ямка: край на высоте земли (0), середина
+// на 20 ед. ниже, а земля над ней сплошная — PS1 рисовал её поверх земли порядком списка. С буфером глубины ямка
+// уходила под землю, край спорил с землёй: на бегу мерцала, в иной точке не рисовалась вовсе (2026-10-17).
+// Наклейка — актор из 3–64 вершин, почти плоский и горизонтальный: перепад высоты < 10 % ширины и ≤ 40 ед.
+// Рисуется как тень — списком 4 после земли и до акторов, глубина подтянута к камере, без записи глубины.
+// Камень или ящик сюда не попадает (высота сравнима с шириной), иначе сквозь них просвечивали бы акторы позади.
+#define DC_BITS 12
+static struct dc_obj { uint32_t obj; float lo, hi, x0, x1, z0, z1; uint32_t nv; } dc_tab[1 << DC_BITS];
+static uint32_t dc_build = ~0u, dc_count;
+
+static struct dc_obj *dc_find(uint32_t obj, int add)
+{
+    uint32_t h = (obj * 0x9e3779b1u) >> (32 - DC_BITS);
+    for (uint32_t n = 0; n < (1u << DC_BITS); n++, h = (h + 1) & ((1u << DC_BITS) - 1)) {
+        if (dc_tab[h].obj == obj)
+            return &dc_tab[h];
+        if (!dc_tab[h].obj) {
+            if (!add)
+                return NULL;
+            dc_tab[h].obj = obj;
+            dc_tab[h].lo = dc_tab[h].x0 = dc_tab[h].z0 = 1e30f;
+            dc_tab[h].hi = dc_tab[h].x1 = dc_tab[h].z1 = -1e30f;
+            dc_tab[h].nv = 0;
+            return &dc_tab[h];
+        }
+    }
+    return NULL;
+}
+
+static int dc_is_flat(const struct dc_obj *e)
+{
+    float h = e->hi - e->lo, wd = fmaxf(e->x1 - e->x0, e->z1 - e->z0);
+    return e->nv >= 3 && e->nv <= 64 && h <= 40.0f && (h < 2.0f || h < 0.1f * wd);
+}
+
+static void dc_scan(const struct bb_snapshot *b)
+{
+    struct hr_cam k;
+    static uint32_t logged_lvl = ~0u, logged_n = ~0u;
+    if (b->build_id == dc_build)
+        return;
+    dc_build = b->build_id;
+    memset(dc_tab, 0, sizeof dc_tab);
+    dc_count = 0;
+    if (!bb_cfg.decals || !hr_cam_of(b, &k))
+        return;
+    for (uint32_t i = 0; i < b->nprims; i++) {
+        const struct bb_prim *p = &b->prims[i];
+        const struct bb_vert *v0 = &b->verts[p->first];
+        if (v0->tag != BB_TAG_ACTOR || !v0->obj)
+            continue;
+        struct dc_obj *e = dc_find(v0->obj, 1);
+        if (!e)
+            continue;
+        for (unsigned j = 0; j < p->nverts; j++) {
+            double q[3], w[3];
+            to_view(&v0[j].x, 1.0 / 400.0, q);
+            hr_world(&k, q, w);
+            e->lo = fminf(e->lo, (float)-w[1]);
+            e->hi = fmaxf(e->hi, (float)-w[1]);
+            e->x0 = fminf(e->x0, (float)w[0]);
+            e->x1 = fmaxf(e->x1, (float)w[0]);
+            e->z0 = fminf(e->z0, (float)w[2]);
+            e->z1 = fmaxf(e->z1, (float)w[2]);
+            e->nv++;
+        }
+    }
+    for (uint32_t h = 0; h < (1u << DC_BITS); h++)
+        dc_count += dc_tab[h].obj && dc_is_flat(&dc_tab[h]);
+    uint32_t lvl = b->level_gen;
+    if (lvl != logged_lvl || (dc_count && logged_n == 0)) {
+        logged_lvl = lvl;
+        logged_n = dc_count;
+        bb_log("наклейки на земле: %u объектов", dc_count);
+    }
+}
+
+static int dc_flat(uint32_t obj)
+{
+    const struct dc_obj *e = dc_count ? dc_find(obj, 0) : NULL;
+    return e && dc_is_flat(e);
+}
+
 static int prim_list(const struct bb_snapshot *b, const struct bb_prim *p)
 {
     const struct bb_vert *v0 = &b->verts[p->first];
@@ -1549,6 +1633,8 @@ static int prim_list(const struct bb_snapshot *b, const struct bb_prim *p)
         return 4;
     if (v0->tag == BB_TAG_BLOCK && !is_translucent(b, p))
         return 3;
+    if (v0->tag == BB_TAG_ACTOR && dc_flat(v0->obj))     // наклейка на земле — как тень
+        return 4;
     return 1;
 }
 static unsigned gprog, gvao, gvbo, gibo, gpu_gen, gpu_trans_mode;
@@ -2270,6 +2356,7 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
     hud_k_was = hud_k;
     hud_scan(b);
     title_scan(b);
+    dc_scan(b);
     pu_compute(b);
     const double *pdb = pu_get(b->build_id), *pda = a ? pu_get(a->build_id) : NULL;
     int pu_on = pdb && pu_nply && ((pdb[0] != 0 || pdb[2] != 0) || (pda && (pda[0] != 0 || pda[2] != 0)));
@@ -2385,7 +2472,7 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
             p15_abr[world][abr0]++;
         // тень — плоский квад на неровной земле: края уходили под холм, на бегу мелькали; её глубина подтянута к камере
         // в шейдере (список 4, рисуется до акторов)
-        int trans = world && is_translucent(b, p);
+        int trans = world && (is_translucent(b, p) || list == 4);   // тени и наклейки — без записи глубины
         gpu_cmd_add(list, base, n, p->state, abr, trans, !world && (hud_anchor[i] || is_wide_overlay(b, p)));
     }
     uint32_t nvg = ghost_build(a, b, b->nverts, ntotal), nig = 0;
