@@ -77,6 +77,10 @@ void bb_config_load(void)
     bb_cfg.analog = GetPrivateProfileIntA("remaster", "analog", 1, ini);
     bb_cfg.stick_dz = GetPrivateProfileIntA("remaster", "stick_dz", 12, ini);
     bb_cfg.stick_full = GetPrivateProfileIntA("remaster", "stick_full", 90, ini);
+    if (bb_cfg.stick_dz < 0 || bb_cfg.stick_dz > 50)        // как в [live]: stick_full ≤ stick_dz глушил стик
+        bb_cfg.stick_dz = 12;
+    if (bb_cfg.stick_full < 30 || bb_cfg.stick_full > 100 || bb_cfg.stick_full <= bb_cfg.stick_dz)
+        bb_cfg.stick_full = 90;
     bb_cfg.jump_buf = GetPrivateProfileIntA("remaster", "jump_buf", 4, ini);
     bb_cfg.pad_esc = GetPrivateProfileIntA("remaster", "pad_esc", 1, ini);
     bb_cfg.pad_map = GetPrivateProfileIntA("remaster", "pad_map", 1, ini);
@@ -87,19 +91,20 @@ void bb_config_load(void)
     bb_cfg.sneak = GetPrivateProfileIntA("remaster", "sneak", 0, ini);
     bb_cfg.big_cores = GetPrivateProfileIntA("remaster", "big_cores", 1, ini);
     bb_cfg.hotkeys = GetPrivateProfileIntA("remaster", "hotkeys", 0, ini);
+    bb_cfg.dpi_aware = GetPrivateProfileIntA("remaster", "dpi_aware", 1, ini);
     bb_cfg.fog = GetPrivateProfileIntA("remaster", "fog", 1, ini);
-    bb_cfg.draw_dist = GetPrivateProfileIntA("remaster", "draw_dist", 100, ini);
+    bb_cfg.draw_dist = GetPrivateProfileIntA("remaster", "draw_dist", 200, ini);
     bb_cfg.fog_start = GetPrivateProfileIntA("remaster", "fog_start", 75, ini);
     bb_cfg.actor_dist = GetPrivateProfileIntA("remaster", "actor_dist", 400, ini);
     bb_cfg.fade_in = GetPrivateProfileIntA("remaster", "fade_in", 1, ini);
-    bb_cfg.haze = GetPrivateProfileIntA("remaster", "haze", 100, ini);
-    bb_cfg.haze_depth = GetPrivateProfileIntA("remaster", "haze_depth", 0, ini);
-    bb_cfg.haze_thick = GetPrivateProfileIntA("remaster", "haze_thick", 2500, ini);
-    bb_cfg.haze_near = GetPrivateProfileIntA("remaster", "haze_near", 4000, ini);
-    bb_cfg.haze_far = GetPrivateProfileIntA("remaster", "haze_far", 20000, ini);
-    bb_cfg.haze_max = GetPrivateProfileIntA("remaster", "haze_max", 85, ini);
-    bb_cfg.haze_a0 = GetPrivateProfileIntA("remaster", "haze_a0", 2, ini);
-    bb_cfg.haze_a1 = GetPrivateProfileIntA("remaster", "haze_a1", 10, ini);
+    bb_cfg.haze = GetPrivateProfileIntA("remaster", "haze", 0, ini);
+    bb_cfg.haze_depth = GetPrivateProfileIntA("remaster", "haze_depth", -800, ini);
+    bb_cfg.haze_thick = GetPrivateProfileIntA("remaster", "haze_thick", 1200, ini);
+    bb_cfg.haze_near = GetPrivateProfileIntA("remaster", "haze_near", 1800, ini);
+    bb_cfg.haze_far = GetPrivateProfileIntA("remaster", "haze_far", 7500, ini);
+    bb_cfg.haze_max = GetPrivateProfileIntA("remaster", "haze_max", 100, ini);
+    bb_cfg.haze_a0 = GetPrivateProfileIntA("remaster", "haze_a0", 0, ini);
+    bb_cfg.haze_a1 = GetPrivateProfileIntA("remaster", "haze_a1", 5, ini);
     bb_cfg.room_depth = GetPrivateProfileIntA("remaster", "room_depth", 3, ini);
     bb_cfg.v_guard = GetPrivateProfileIntA("remaster", "v_guard", 30, ini);
     bb_cfg.portal_guard = GetPrivateProfileIntA("remaster", "portal_guard", 100, ini);
@@ -115,6 +120,19 @@ void bb_config_live(void)
     while (n > 0 && ini[n - 1] != '\\' && ini[n - 1] != '/')
         n--;
     lstrcpyA(ini + n, "remaster.ini");
+    // ~70 чтений ini раз в секунду на главном потоке (под Wine каждое — разбор файла) — только если файл или уровень
+    // сменились ([levelN] зависят от уровня)
+    static FILETIME seen_mt;
+    static uint32_t seen_lvl = ~0u;
+    uint32_t ram0 = *(volatile uint32_t *)(uintptr_t)0x52fd00u;
+    uint32_t lvl0 = ram0 ? *(volatile uint32_t *)(uintptr_t)(ram0 + 0x10000) : ~1u;
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (GetFileAttributesExA(ini, GetFileExInfoStandard, &fa)) {
+        if (lvl0 == seen_lvl && CompareFileTime(&fa.ftLastWriteTime, &seen_mt) == 0)
+            return;
+        seen_mt = fa.ftLastWriteTime;
+    }
+    seen_lvl = lvl0;
     int r = GetPrivateProfileIntA("live", "render", -1, ini);
     if (r >= 0 && r != bb_cfg.render) {
         bb_cfg.render = r;
@@ -454,7 +472,16 @@ void bb_late_init(void)
     bb_iat_hook(BB_IAT_GETPROCADDRESS, (void *)hook_GetProcAddress, (void **)&real_GetProcAddress);
     bb_iat_hook(BB_IAT_LOADLIBRARYA, (void *)hook_LoadLibraryA, (void **)&real_LoadLibraryA);
     bb_iat_hook(BB_IAT_FREELIBRARY, (void *)hook_FreeLibrary, (void **)&real_FreeLibrary);
-    if (bb_cfg.big_cores)
+    // Windows: bugs.exe без манифеста — DPI-unaware: при масштабе > 100 % окно и FBO получали виртуальный размер
+    // (1280×800 вместо 1920×1200 при 150 %), DWM растягивал картинку. Под Wine (96 dpi) ничего не меняет.
+    if (bb_cfg.dpi_aware) {
+        HMODULE u32 = GetModuleHandleA("user32.dll");
+        BOOL (WINAPI *set_ctx)(HANDLE) = u32 ? (void *)GetProcAddress(u32, "SetProcessDpiAwarenessContext") : NULL;
+        BOOL (WINAPI *set_old)(void) = u32 ? (void *)GetProcAddress(u32, "SetProcessDPIAware") : NULL;
+        if (!(set_ctx && set_ctx((HANDLE)(intptr_t)-4)) && set_old)   // PER_MONITOR_AWARE_V2, иначе system-aware
+            set_old();
+    }
+    if (bb_cfg.big_cores && wine_get_version)    // частоты ядер — из /sys Linux (Z:), на Windows решает её планировщик
         pin_big_cores();
     // Windows: таймер 1 мс — иначе сон пейсера (NtDelayExecution) идёт шагами по 15,6 мс и срывает кадры; под Wine без эффекта
     UINT (WINAPI *time_begin_period)(UINT) = (void *)GetProcAddress(LoadLibraryA("winmm.dll"), "timeBeginPeriod");

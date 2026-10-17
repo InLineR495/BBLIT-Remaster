@@ -47,7 +47,7 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
 - The time machine's carrot no longer sticks through the logo on the title screen.
 - The holes in the hub (LS01) no longer flicker or vanish: they are shallow pits under a solid ground mesh, now drawn over the ground as on the PS1.
 
-**Handheld PCs.** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
+**Handheld PCs (Linux/Proton).** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On Windows its own scheduler handles this. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
 
 ## Requirements
 
@@ -62,7 +62,7 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
   | CRC32 of `.text` (checked by the mod) | `ecffb7c9` |
 
   To check your copy: on Windows run `certutil -hashfile bugs.exe SHA256` in the `BIN` folder, on Linux run `sha256sum bugs.exe`. If your `bugs.exe` is different, the mod switches itself off and the game runs as usual. `BIN\remaster.log` will then contain the line "не эталонный bugs.exe" ("not the reference bugs.exe"). Other releases with the same code (same `.text` CRC32) will also work. If yours doesn't, open an issue with its hash.
-- A GPU with **OpenGL 4.6**: Mesa (AMD, Intel) on Linux, or a current AMD, NVIDIA or Intel driver on Windows.
+- A GPU with **OpenGL 4.6** (tested): Mesa (AMD, Intel) on Linux, or a current AMD, NVIDIA or Intel driver on Windows. Older drivers down to OpenGL 3.3 should also work.
 - An XInput gamepad: Xbox-compatible, Steam Deck, Legion Go, or a DualSense through Steam Input. The keyboard works as in the original.
 
 ## Installation
@@ -98,7 +98,8 @@ Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these ar
    "C:\...\Bugs Bunny\BIN\bugs.exe" /opengl /win /b0 /x800 /y600
    ```
 3. Always start the game through this shortcut. The launcher doesn't pass `/opengl /win`.
-4. If your driver control panel forces vertical sync off, set it back to "application-controlled". The mod paces its frames to vsync.
+4. Turn vertical sync on for `bugs.exe` in your driver control panel (NVIDIA: Vertical sync → On; AMD: Wait for Vertical Refresh → Always On). The mod paces its frames to vsync.
+5. With display scaling above 100 %, the mod switches the game to DPI-aware mode, so it renders at full resolution.
 
 ### Checking that it works
 
@@ -123,7 +124,7 @@ Delete `ddraw.dll` from `BIN` (and `remaster.ini` / `remaster.log` if you like).
 
 ## Settings
 
-All settings live in `BIN\remaster.ini` and are commented there. The `[live]` section is re-read once per second, so you can edit it while playing. The most useful keys:
+The main settings live in `BIN\remaster.ini` and are commented there. The `[live]` section is re-read once per second, so you can edit it while playing. The most useful keys:
 
 | Key | Section | Default | What it does |
 |---|---|---|---|
@@ -135,7 +136,7 @@ All settings live in `BIN\remaster.ini` and are commented there. The `[live]` se
 | `haze` | `[live]`, `[levelN]` | 0 / 100 | Ground haze strength, %; per-level overrides go in `[levelN]` sections |
 | `ps1_light` | `[live]` | 18 | World brightness ×10: 20 = exactly as on the PS1, 10 = like the PC port, 0 = PC port path |
 | `xinput` | `[remaster]` | 1 | 0 = original gamepad handling |
-| `big_cores` | `[remaster]` | 1 | Pin the main thread to the fast cores on hybrid CPUs |
+| `big_cores` | `[remaster]` | 1 | Pin the main thread to the fast cores on hybrid CPUs (Linux/Proton) |
 
 ## Known beta limitations
 
@@ -143,6 +144,7 @@ All settings live in `BIN\remaster.ini` and are commented there. The `[live]` se
 - At a low TDP, the heaviest scenes occasionally (about once per second) repeat one frame.
 - Windows is untested.
 - Only an unpatched `bugs.exe` 1.6 is supported.
+- The before/after screenshots were taken before the PS1 brightness change (`ps1_light`).
 
 ## Building from source
 

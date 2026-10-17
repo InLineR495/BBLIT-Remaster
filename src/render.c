@@ -190,7 +190,9 @@ void bb_render_engine_context_deleted(HGLRC ctx)
 
 static int create_ours(HDC dc, HGLRC eng)
 {
-    static const int attribs[] = {
+    // compatibility-профиль: 4.6, при отказе драйвера — ниже до 3.3 (шейдеры — GLSL 330, синхронизация — GL 3.2)
+    static const int vers[][2] = { { 4, 6 }, { 4, 5 }, { 4, 3 }, { 4, 0 }, { 3, 3 } };
+    int attribs[] = {
         0x2091, 4,      // WGL_CONTEXT_MAJOR_VERSION_ARB
         0x2092, 6,      // WGL_CONTEXT_MINOR_VERSION_ARB
         0x9126, 2,      // WGL_CONTEXT_PROFILE_MASK_ARB = COMPATIBILITY
@@ -207,7 +209,11 @@ static int create_ours(HDC dc, HGLRC eng)
         bb_log("M3: нет wglCreateContextAttribsARB");
         return 0;
     }
-    ours = gl.CreateContextAttribsARB(dc, eng, attribs);
+    for (unsigned k = 0; k < sizeof vers / sizeof vers[0] && !ours; k++) {
+        attribs[1] = vers[k][0];
+        attribs[3] = vers[k][1];
+        ours = gl.CreateContextAttribsARB(dc, eng, attribs);
+    }
     if (!ours) {
         bb_log("M3: wglCreateContextAttribsARB(share=%p) не создал контекст, err=%lu", (void *)eng, GetLastError());
         return 0;
@@ -1219,7 +1225,7 @@ static int is_translucent(const struct bb_snapshot *s, const struct bb_prim *p)
 // Квады — всегда два треугольника (r0,r1,r2)+(r0,r2,r3): диагональ PS1 и разреза движка (R1).
 static void draw_pass(const struct bb_snapshot *s, int world, const int vp43[4], const int vpwide[4])
 {
-    int open = 0, wide_now = -1, trans_now = -1;
+    int open = 0, wide_now = world ? 0 : -1, trans_now = -1;   // мир — всегда вьюпорт 4:3 (wide = 0)
     cur = NULL;
     gl.MatrixMode(GL_PROJECTION);
     gl.LoadIdentity();
@@ -1930,7 +1936,7 @@ static void fd_scan(const struct bb_snapshot *a, const struct bb_snapshot *b)
             if (o->last + 1 < b->build_id) {        // в прошлом тике не было — появился
                 o->first = b->build_id;
                 o->distant = o->last != 0 || b->build_id > 2;
-                o->inview = !test;                  // без камеры A — как раньше
+                o->inview = !test && !(a && wo && cam_cut);   // без камеры A — как раньше; смена ракурса — сразу
                 fd_sec += o->distant;
             }
             o->last = b->build_id;
@@ -3405,7 +3411,8 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
         trace_frame(t_start, a ? alpha : 1.0);
     }
 
-    if (++frames == 1 || err || err2 || (frames % 1000 == 0))
+    static uint32_t err_logged;
+    if (++frames == 1 || ((err || err2) && err_logged++ < 20) || (frames % 1000 == 0 && bb_cfg.log_sec))
         bb_log("M3: кадр #%u: prims=%u verts=%u states=%u окно %dx%d 4:3=%dx%d F_cull=%.3f α=%.2f совпало %u/%u "
                "%s списков %u/%u err=%#x/%#x", frames, s->nprims, s->nverts, s->nstates, cw, ch, vw, vh, fcull, alpha,
                m_matched, m_total, use_gpu ? "шейдеры" : "немедл.", gncmd[1] + gncmd[2] + gncmd[3] + gncmd[4], gncmd[0], err, err2);

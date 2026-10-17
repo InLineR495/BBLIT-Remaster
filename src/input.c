@@ -172,7 +172,7 @@ static void __cdecl n2_map_pad(void)
     }
     if (vbtn(&xs, slot_v(8)))
         hi |= 0x04;                             // R3
-    if ((!bb_cfg.pad_esc || front_end()) && vbtn(&xs, slot_v(9)))
+    if ((!bb_cfg.pad_esc || front_end() || !bb_game_hwnd) && vbtn(&xs, slot_v(9)))   // окна нет (borderless=0) — Esc не послать
         hi |= 0x08;                             // Start (при pad_esc в игре Start — только пауза: в меню паузы он «подтверждал»)
     WORD b = xs.Gamepad.wButtons;
     hi |= (b & 0x0001 ? 0x10 : 0) | (b & 0x0008 ? 0x20 : 0) | (b & 0x0002 ? 0x40 : 0) | (b & 0x0004 ? 0x80 : 0);
@@ -237,8 +237,10 @@ static void n1_post(void)
         if (RD8(G_PAUSE) && edge(1))            // B в паузе — «назад» (cond 0x60, как Esc с клавиатуры)
             *(volatile uint8_t *)(uintptr_t)G_EXTRA |= 2;
     }
-    if (!drives_stick())
+    if (!drives_stick()) {
+        jb_left = 0;                            // пауза, меню, загрузка: отложенный прыжок не переживает их
         return;
+    }
     if (bb_cfg.cam_stick) {                     // K2: правый стик — поворот камеры (шаг за тик, кривая t^1,5)
         double rx = xs.Gamepad.sThumbRX / 32767.0, dz = bb_cfg.stick_dz / 100.0;
         double a = fabs(rx) > 1 ? 1 : fabs(rx);

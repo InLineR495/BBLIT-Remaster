@@ -31,6 +31,7 @@ jobs:
           mkdir -p pkg/BIN
           cp build/ddraw.dll dist/remaster.ini pkg/BIN/
           cp README.md README.ru.md LICENSE pkg/
+          cp -r docs pkg/
           (cd pkg && zip -r "../BBLIT-Remaster-$VER.zip" .)
           sha256sum "BBLIT-Remaster-$VER.zip" build/ddraw.dll
 

@@ -28,17 +28,55 @@ static int vb_miss;
 static uint32_t vb_missed;                // M4g: пропущенных vblank (кадр показан на vblank позже) с прошлого лога
 
 // после нашего свопа: при vsync своп возвращается на vblank — период экрана меряется по ним. Частоте из
-// EnumDisplaySettings верить нельзя: под gamescope Wine отдаёт 144 Гц панели при локе 120 (2026-10-16).
+// EnumDisplaySettings верить нельзя: под gamescope Wine отдаёт 144 Гц панели при локе 120 (2026-10-16), поэтому и
+// захват не гейтится ею: при локе 60 на «144-герцовой» панели интервалы 16,7 мс не попадали в окно [p0/2, 1,6·p0]
+// и сетка vblank не появлялась вовсе. Захват — нижний кластер 16 интервалов 2–40 мс (пропуски vblank кратны периоду),
+// дальше окно — от измеренного периода; 120 отброшенных подряд (смена режима экрана) — захват заново.
+static int64_t cap_dt[16];
+static int cap_n, vb_rej;
+
 void bb_pacer_swapped(int64_t qpc)
 {
     static int64_t prev;
-    int64_t dt = qpc - prev, p0 = (int64_t)(frame_period * (double)qpf.QuadPart);
+    int64_t dt = qpc - prev, ms = qpf.QuadPart / 1000;
     prev = qpc;
-    if (vb_period && dt > vb_period * 23 / 20 && dt < vb_period * 4)
-        vb_missed++;                     // кадр опоздал к vblank (видно парой интервалов ~10,3 + 6,3 мс при 8,34)
-    if (dt < p0 / 2 || dt > p0 * 8 / 5)  // пропуск vblank, пауза
+    if (!vb_period) {
+        if (dt < 2 * ms || dt > 40 * ms)
+            return;
+        cap_dt[cap_n++] = dt;
+        if (cap_n < (int)(sizeof cap_dt / sizeof cap_dt[0]))
+            return;
+        int64_t mn = cap_dt[0], sum = 0;
+        int k = 0;
+        for (int i = 1; i < cap_n; i++)
+            mn = cap_dt[i] < mn ? cap_dt[i] : mn;
+        for (int i = 0; i < cap_n; i++)
+            if (cap_dt[i] <= mn * 23 / 20) {
+                sum += cap_dt[i];
+                k++;
+            }
+        cap_n = 0;
+        if (k < 6)                       // разброс без нижнего кластера — ещё серия
+            return;
+        vb_period = sum / k;
+        vb_grid = 0;
+        vb_rej = 0;
+        bb_log("M4f: период vblank %.3f мс (по свопам)", (double)vb_period * 1000.0 / (double)qpf.QuadPart);
         return;
-    vb_period = vb_period ? vb_period + (dt - vb_period) / 16 : dt;
+    }
+    if (dt > vb_period * 23 / 20 && dt < vb_period * 4)
+        vb_missed++;                     // кадр опоздал к vblank (видно парой интервалов ~10,3 + 6,3 мс при 8,34)
+    if (dt < vb_period / 2 || dt > vb_period * 8 / 5) {   // пропуск vblank, пауза
+        if (++vb_rej >= 120) {           // все свопы мимо окна — сменился режим экрана
+            vb_period = 0;
+            vb_grid = 0;
+            vb_rej = 0;
+            cap_n = 0;
+        }
+        return;
+    }
+    vb_rej = 0;
+    vb_period = vb_period + (dt - vb_period) / 16;
     // сетка: возврат свопа гуляет (пары 9,5/7,2 мс при ровном показе) — фаза подтягивается на 1/8 ошибки
     double P = (double)vb_period, r = (double)qpc;
     if (!vb_grid) {
