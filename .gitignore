@@ -1,0 +1,5 @@
+build/
+device/
+*.log
+__pycache__/
+.DS_Store
