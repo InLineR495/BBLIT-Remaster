@@ -1302,6 +1302,7 @@ static void draw_pass(const struct bb_snapshot *s, int world, const int vp43[4],
 #define GL_FUNC_ADD 0x8006
 #define GL_FUNC_REVERSE_SUBTRACT 0x800b
 #define GL_ONE 1
+#define GL_SRC_ALPHA 0x0302
 #define GL_ONE_MINUS_SRC_ALPHA 0x0303
 #define GL_FLAT 0x1d00
 #define GL_SMOOTH 0x1d01
@@ -1415,7 +1416,7 @@ static const char *const gpu_fs =
     "flat in float v_fade;\n"
     "uniform sampler2D u_smp, u_sky;\n"
     "uniform int u_tex, u_flat, u_afunc, u_abr, u_fadd, u_stp;\n"
-    "uniform float u_light;\n"
+    "uniform float u_light, u_akill;\n"
     "uniform float u_aref, u_gain, u_fogD, u_fogS;\n"
     "in float v_h;\n"
     "uniform int u_bgpass;\n"
@@ -1482,6 +1483,9 @@ static const char *const gpu_fs =
     // Множитель ps1_light/10: 20 — как PS1, по умолчанию 18 — чуть ниже, без пересвета (пользователь, 2026-10-17)
     "        if (u_light > 0.0 && v_w > 0.0 && v_spr < 0.5) f.rgb = min(t.rgb * col.rgb * u_light, vec3(1.0));\n"
     "        if (!atest(f.a)) discard;\n"
+    // смешивание по альфе текстуры с записью глубины — в два прохода (gpu_pass): u_akill > 0 — только α ≥ u_akill,
+    // u_akill < 0 — только кайма α < −u_akill
+    "        if (u_akill > 0.0 ? f.a < u_akill : u_akill < 0.0 && f.a >= -u_akill) discard;\n"
     "        float fg = fogf();\n"                   // смешиваемое со сложением гаснет, остальное уходит в задник
     "        float hf = hazef();\n"
     "        if (hf > 0.0) f.rgb = u_fadd != 0 ? f.rgb * (1.0 - hf) : mix(f.rgb, hazecol(), hf);\n"
@@ -1658,7 +1662,7 @@ static int prim_list(const struct bb_snapshot *b, const struct bb_prim *p)
 static unsigned gprog, gvao, gvbo, gibo, gpu_gen, gpu_trans_mode;
 static int gpu_state;               // 0 — не создан, 1 — готов, −1 — отказ (до нового контекста)
 static int u_bgpass, u_ci, u_vp, u_scr, u_hz, u_hzTop, u_hzThick, u_hzNear, u_hzFar, u_hzMax, u_hzA0, u_hzA1, u_hzCol;
-static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp, u_light;
+static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp, u_light, u_akill;
 
 static unsigned gpu_shader(unsigned type, const char *src)
 {
@@ -1720,7 +1724,7 @@ static int gpu_init(void)
         return 0;
     }
 #define U(v) (v = gx.GetUniformLocation(gprog, #v))
-    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp); U(u_light);
+    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp); U(u_light); U(u_akill);
     U(u_fogD); U(u_fogS); U(u_fadd); U(u_fadek);
     U(u_bgpass); U(u_ci); U(u_vp); U(u_scr); U(u_hz); U(u_hzTop); U(u_hzThick); U(u_hzNear); U(u_hzFar);
     U(u_hzMax); U(u_hzA0); U(u_hzA1); U(u_hzCol);
@@ -2573,6 +2577,22 @@ static void gpu_pass(const struct bb_snapshot *s, int list, const int vp43[4], c
             }
             gx.Uniform1i(u_abr, abr);
             abr_now = abr;
+        }
+        // Смешивание по альфе текстуры без альфа-теста, вершины непрозрачны (лист пальмы LS01 у камеры, текстура 421):
+        // такое идёт непрозрачным, с записью глубины, а прозрачные тексели (α 0 — фон текстуры, вблизи камеры почти
+        // весь треугольник) цвета не меняли, но писали глубину — акторы и наклейки (рисуются после комнат) за ними
+        // вырезались: тело Багза, верх машины времени, норы. В оригинале движок рисует акторов раньше листа.
+        // Два прохода: α ≥ 0,5 — с глубиной, кайма — без; цвет тот же. Замер 2026-10-17 (снимок из памяти игры).
+        if (bb_cfg.alpha_split && abr < 0 && !c->trans && st->caps & BB_CAP_TEXTURE && st->caps & BB_CAP_BLEND &&
+            st->bsrc == GL_SRC_ALPHA && st->bdst == GL_ONE_MINUS_SRC_ALPHA) {
+            gx.Uniform1f(u_akill, 0.5f);
+            gx.DrawElements(GL_TRIANGLES, (int)c->count, GL_UNSIGNED_INT, (void *)(uintptr_t)(c->first * 4));
+            gl.DepthMask(0);
+            gx.Uniform1f(u_akill, -0.5f);
+            gx.DrawElements(GL_TRIANGLES, (int)c->count, GL_UNSIGNED_INT, (void *)(uintptr_t)(c->first * 4));
+            gl.DepthMask(1);
+            gx.Uniform1f(u_akill, 0.0f);
+            continue;
         }
         gx.DrawElements(GL_TRIANGLES, (int)c->count, GL_UNSIGNED_INT, (void *)(uintptr_t)(c->first * 4));
     }
