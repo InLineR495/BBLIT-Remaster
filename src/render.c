@@ -1173,10 +1173,23 @@ static void spin_snap(const struct bb_snapshot *a, const struct bb_snapshot *b, 
 // (воронка — тоже) жёсткие объекты. Вершины B поворачиваются на месте в снимке (в мире, вокруг центра) — следующая пара
 // берёт их как A. Первая версия прятала проскоки сдвигом от «обычного шага» — шаг прилипал к выбросу (97° вместо 24°,
 // −118° вместо +48°), и вихрь со временем «колбасило» (пользователь).
+// Центр и ось — только по целому кольцу (вершины вокруг центра без пропуска > 70°): у края экрана движок отбрасывает
+// треугольники, центр видимого куска — не центр вихря, кусок вращался вокруг чужой точки («маленькая часть в углу
+// экрана — колбасит»). Дальше — запомненные; поворачиваются все вершины объекта, и вошедшие в кадр в этом тике.
+// Пока вихрь обрезан краем экрана — фаза движка: движок отбрасывает треугольники по своей фазе, в нашей к краю
+// приезжали не те (дыры с прямым срезом, набор менялся каждый тик). История скорости идёт дальше — целый вихрь снова
+// крутится ровно без скачка; скачок фазы один — при уходе за край.
 #define SH_BITS 10
 #define SH_HIST 32
+#define SH_RING 32
 #define SH_PI 3.14159265358979323846
-static struct sh_obj { uint32_t obj, last; double n[3], corr; float inc[SH_HIST]; uint8_t k, pos; } sh_tab[1 << SH_BITS];
+static struct sh_obj {
+    uint32_t obj, last;
+    double n[3], c[3], rad, corr;
+    float inc[SH_HIST];
+    uint16_t nfull;                 // вершин при целом кольце: меньше — движок отбросил часть за краем экрана
+    uint8_t k, pos, cvalid;
+} sh_tab[1 << SH_BITS];
 static uint32_t sh_used, sh_build;
 static const struct bb_snapshot *sh_snap;
 
@@ -1251,10 +1264,19 @@ static int sh_speed(const struct sh_obj *o, double *w)     // устойчива
     return 1;
 }
 
+static void sh_plane(const double *n, const double *r, double *o)    // проекция на плоскость ⟂ n
+{
+    double d = r[0] * n[0] + r[1] * n[1] + r[2] * n[2];
+    for (int k = 0; k < 3; k++)
+        o[k] = r[k] - d * n[k];
+}
+
 static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, double ih)
 {
-    static double cov[1 << SP_BITS][6], acc[1 << SP_BITS][4];  // ковариация B; Σ a·b, Σ (a×b)·n, Σ|a|², Σ|b|²
-    static double nrm[1 << SP_BITS][3], rot[1 << SP_BITS];
+    static double cov[1 << SP_BITS][6], acc[1 << SP_BITS][5];  // ковариация B; Σ a·b, Σ (a×b)·n, Σ|a|², Σ|b|², max|b|
+    static double nrm[1 << SP_BITS][3], ctr[1 << SP_BITS][3], rot[1 << SP_BITS];
+    static float ang[1 << SP_BITS][SH_RING];
+    static uint8_t nang[1 << SP_BITS], use[1 << SP_BITS];
     struct hr_cam ka, kb;
     if (sh_snap == b && sh_build == b->build_id)    // B уже поправлен (пара пересчитывается — jump_k и т. п.)
         return;
@@ -1269,56 +1291,76 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
     memset(cov, 0, sizeof cov);
     memset(acc, 0, sizeof acc);
     memset(rot, 0, sizeof rot);
-    // 0 — центры A и B (мир); 1 — ковариация B → ось; 2 — угол A (показанный) → B (движка) в плоскости → решение;
-    // 3 — вершины B повернуть вокруг центра
-    for (int pass = 0; pass < 4; pass++) {
+    memset(nang, 0, sizeof nang);
+    memset(use, 0, sizeof use);
+    // 0 — центр всех вершин B; 1 — ковариация → ось; 2 — углы вокруг центра → целое ли кольцо, выбор центра;
+    // 3 — угол показанный A → B движка вокруг центра → решение; 4 — все вершины B повернуть вокруг центра
+    for (int pass = 0; pass < 5; pass++) {
         for (uint32_t i = 0; i < b->nverts; i++) {
             const struct bb_vert *v = &b->verts[i];
-            int32_t j = match_idx[i];
-            if (!v->obj || j < 0 || !sp_fx[i])
+            if (!v->obj || !sp_fx[i])
                 continue;
             int h = sp_slot(v->obj);
-            if (h < 0 || (pass > 0 && sp_n[h] < 4))
+            if (h < 0 || (pass > 0 && sp_n[h] < 4) || (pass > 2 && !use[h]))
                 continue;
-            double pa[3], pb[3], wa[3], wb[3], ra[3], rb[3];
-            to_view(&a->verts[j].x, ih, pa);
+            int32_t j = match_idx[i];
+            double pb[3], wb[3], rb[3];
             to_view(&v->x, ih, pb);
-            hr_world(&ka, pa, wa);
             hr_world(&kb, pb, wb);
             if (pass == 0) {
-                for (int r = 0; r < 3; r++) {
-                    sp_c[h][r] += wa[r];
-                    sp_c[h][3 + r] += wb[r];
-                }
+                for (int r = 0; r < 3; r++)
+                    sp_c[h][r] += wb[r];
                 sp_n[h]++;
                 continue;
             }
-            for (int r = 0; r < 3; r++) {
-                ra[r] = wa[r] - sp_c[h][r];
-                rb[r] = wb[r] - sp_c[h][3 + r];
-            }
-            const double *n = nrm[h];
+            const double *c = pass <= 2 ? sp_c[h] : ctr[h], *n = nrm[h];
+            for (int r = 0; r < 3; r++)
+                rb[r] = wb[r] - c[r];
             if (pass == 1) {
                 cov[h][0] += rb[0] * rb[0]; cov[h][1] += rb[0] * rb[1]; cov[h][2] += rb[0] * rb[2];
                 cov[h][3] += rb[1] * rb[1]; cov[h][4] += rb[1] * rb[2]; cov[h][5] += rb[2] * rb[2];
-            } else if (pass == 2) {
-                double a2[3], b2[3];
-                double da = ra[0] * n[0] + ra[1] * n[1] + ra[2] * n[2], db = rb[0] * n[0] + rb[1] * n[1] + rb[2] * n[2];
-                for (int r = 0; r < 3; r++) {
-                    a2[r] = ra[r] - da * n[r];
-                    b2[r] = rb[r] - db * n[r];
+            } else if (pass == 2) {                 // угол в плоскости (базис u, n×u), радиус
+                double p[3], u[3] = { 1, 0, 0 }, e[3];
+                if (fabs(n[0]) > 0.9) {
+                    u[0] = 0;
+                    u[1] = 1;
                 }
+                sh_plane(n, u, e);
+                double el = sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+                sh_plane(n, rb, p);
+                double pr = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+                acc[h][4] = fmax(acc[h][4], pr);
+                if (pr <= 4.0) {
+                    // центр веера (на оси) — не в кольце
+                } else if (nang[h] < SH_RING) {
+                    double x = (p[0] * e[0] + p[1] * e[1] + p[2] * e[2]) / el;
+                    double f[3] = { n[1] * e[2] - n[2] * e[1], n[2] * e[0] - n[0] * e[2], n[0] * e[1] - n[1] * e[0] };
+                    double y = (p[0] * f[0] + p[1] * f[1] + p[2] * f[2]) / el;
+                    ang[h][nang[h]++] = (float)atan2(y, x);
+                } else {
+                    nang[h] = 255;                  // слишком много вершин — не кольцо
+                }
+            } else if (pass == 3) {
+                if (j < 0)
+                    continue;
+                double pa[3], wa[3], ra[3], a2[3], b2[3];
+                to_view(&a->verts[j].x, ih, pa);
+                hr_world(&ka, pa, wa);
+                for (int r = 0; r < 3; r++)
+                    ra[r] = wa[r] - c[r];
+                sh_plane(n, ra, a2);
+                sh_plane(n, rb, b2);
                 acc[h][0] += a2[0] * b2[0] + a2[1] * b2[1] + a2[2] * b2[2];
                 acc[h][1] += n[0] * (a2[1] * b2[2] - a2[2] * b2[1]) + n[1] * (a2[2] * b2[0] - a2[0] * b2[2]) +
                              n[2] * (a2[0] * b2[1] - a2[1] * b2[0]);
                 acc[h][2] += a2[0] * a2[0] + a2[1] * a2[1] + a2[2] * a2[2];
                 acc[h][3] += b2[0] * b2[0] + b2[1] * b2[1] + b2[2] * b2[2];
-            } else if (rot[h] != 0) {
+            } else if (rot[h] != 0) {               // pass 4
                 double q[3], w[3], vv[3];
                 float f[3];
                 rot_axis(n, rot[h], rb, q);
                 for (int r = 0; r < 3; r++)
-                    w[r] = q[r] + sp_c[h][3 + r];
+                    w[r] = q[r] + c[r];
                 hr_view(&kb, w, vv);
                 if (!hr_screen(vv, ih, f))
                     continue;
@@ -1330,9 +1372,9 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
         }
         if (pass == 0) {
             for (uint32_t h = 0; h < (1u << SP_BITS); h++)
-                for (int r = 0; sp_n[h] && r < 6; r++)
+                for (int r = 0; sp_n[h] && r < 3; r++)
                     sp_c[h][r] /= sp_n[h];
-        } else if (pass == 1) {
+        } else if (pass == 1) {                     // ось — наименьшая ось ковариации; знак — как в прошлом тике
             for (uint32_t h = 0; h < (1u << SP_BITS); h++) {
                 if (!sp_obj[h] || sp_n[h] < 4)
                     continue;
@@ -1343,33 +1385,77 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
                 for (int k = 1; k < 3; k++)
                     if (m[k][k] < m[k0][k0])
                         k0 = k;
-                double big = fmax(fmax(m[0][0], m[1][1]), m[2][2]);
-                // ось — наименьшая ось ковариации; внешний слой вихря — неглубокая воронка (центр ниже кольца
-                // на ~0,3 R, центр повторён в каждом из 8 треугольников): ~0,06 — осевую долю всё равно отбрасываем
-                if (big <= 0 || m[k0][k0] > 0.3 * big) {    // ось не выделена — не трогаем
-                    sp_n[h] = 0;
-                    continue;
-                }
                 const struct sh_obj *o = sh_find(sp_obj[h], b->build_id);
-                double n[3] = { ev[0][k0], ev[1][k0], ev[2][k0] };
+                double big = fmax(fmax(m[0][0], m[1][1]), m[2][2]), n[3] = { ev[0][k0], ev[1][k0], ev[2][k0] };
+                // внешний слой вихря — неглубокая воронка (центр ниже кольца на ~0,3 R, центр повторён в каждом
+                // из 8 треугольников): ~0,06 — осевую долю всё равно отбрасываем
+                if (big <= 0 || m[k0][k0] > 0.3 * big) {
+                    if (!(o->cvalid && o->last + 2 >= b->build_id)) {
+                        sp_n[h] = 0;                // ось не выделена и не запомнена — не трогаем
+                        continue;
+                    }
+                    memcpy(n, o->n, sizeof n);      // кусок у края экрана — ось прежняя
+                }
                 double sg = o->last + 2 >= b->build_id ? n[0] * o->n[0] + n[1] * o->n[1] + n[2] * o->n[2] : -n[1];
                 for (int r = 0; r < 3; r++)
                     nrm[h][r] = sg < 0 ? -n[r] : n[r];
             }
-        } else if (pass == 2) {                     // решение по объектам
+        } else if (pass == 2) {                     // целое кольцо → центр и ось запомнить; центр — запомненный
             for (uint32_t h = 0; h < (1u << SP_BITS); h++) {
                 if (!sp_obj[h] || sp_n[h] < 4)
                     continue;
                 struct sh_obj *o = sh_find(sp_obj[h], b->build_id);
-                if (o->last + 2 < b->build_id) {    // не было — заново, без сдвига
+                if (o->last + 2 < b->build_id) {    // не было — заново
                     o->corr = 0;
                     o->k = o->pos = 0;
+                    o->cvalid = 0;
+                    o->nfull = 0;
+                }
+                int ring = nang[h] >= 6 && nang[h] <= SH_RING;
+                if (ring) {                         // наибольший пропуск по кругу
+                    float *v = ang[h];
+                    int n = nang[h];
+                    for (int i = 1; i < n; i++)
+                        for (int k = i; k > 0 && v[k - 1] > v[k]; k--) {
+                            float t = v[k];
+                            v[k] = v[k - 1];
+                            v[k - 1] = t;
+                        }
+                    double gap = v[0] + 2 * SH_PI - v[n - 1];
+                    for (int i = 1; i < n; i++)
+                        gap = fmax(gap, v[i] - v[i - 1]);
+                    ring = gap < 70 * SH_PI / 180;
+                }
+                if (ring) {
+                    o->nfull = (uint16_t)sp_n[h];
+                    memcpy(o->c, sp_c[h], sizeof o->c);
+                    memcpy(o->n, nrm[h], sizeof o->n);
+                    o->rad = acc[h][4];
+                    o->cvalid = 1;
                 }
                 o->last = b->build_id;
-                memcpy(o->n, nrm[h], sizeof o->n);
+                if (!o->cvalid)
+                    continue;
+                double d[3], p[3];                  // видимое — в круге запомненного (объект не уехал)
+                for (int r = 0; r < 3; r++)
+                    d[r] = sp_c[h][r] - o->c[r];
+                sh_plane(o->n, d, p);
+                if (sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) > 1.05 * o->rad) {
+                    o->cvalid = 0;
+                    continue;
+                }
+                memcpy(ctr[h], o->c, sizeof ctr[h]);
+                memcpy(nrm[h], o->n, sizeof nrm[h]);
+                use[h] = 1;
+            }
+        } else if (pass == 3) {                     // решение по объектам
+            for (uint32_t h = 0; h < (1u << SP_BITS); h++) {
+                if (!use[h])
+                    continue;
+                struct sh_obj *o = sh_find(sp_obj[h], b->build_id);
                 double sa = acc[h][2], res = sa + acc[h][3] - 2 * sqrt(acc[h][0] * acc[h][0] + acc[h][1] * acc[h][1]);
                 double c = o->corr, w;              // по умолчанию — движение движка с прежним сдвигом фазы
-                if (sa < 16.0 * sp_n[h] || res > 0.02 * sa) {   // точка или не жёсткий — история заново
+                if (sa < 16.0 || res > 0.02 * sa) { // точка или не жёсткий — история заново
                     o->k = o->pos = 0;
                 } else {
                     double th = atan2(acc[h][1], acc[h][0]);    // показанный A → B движка
@@ -1380,6 +1466,8 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
                     if (sh_speed(o, &w))
                         c = wrap_pi(w - th);        // свой шаг: показанный A → показанный B = ω
                 }
+                if (sp_n[h] < o->nfull)             // обрезан краем экрана — фаза движка
+                    c = 0;
                 o->corr = c;
                 rot[h] = c;
             }
