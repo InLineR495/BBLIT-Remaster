@@ -23,6 +23,8 @@ The time vortex between eras, BBLIT Remaster:
 
 **Smooth at any refresh rate.** The original is hard-locked to 30 fps: position, camera and animation advance once per frame, so raising the cap just speeds the game up. The mod keeps the game logic at its native 30 ticks per second and draws in-between frames. Character, camera and animation movement is interpolated, so 60, 90, 120 and 144 Hz all play at the correct speed. By default the frame rate follows your display's refresh rate.
 
+This is not frame interpolation: nothing is guessed from finished images the way TV motion smoothing or frame generation does, so there is no ghosting or warping. Every frame is rendered from the game's own geometry. The mod takes the positions of characters, objects and the camera from two consecutive game ticks and draws the scene in between. Only motion is interpolated: movement, camera and animation. The game logic itself (physics, collisions, enemies, input) still runs at its native 30 ticks per second, exactly as in the original. Because each frame sits between the two latest ticks, the picture trails the game logic by one tick (about 33 ms).
+
 **Widescreen without stretching (Hor+).** 16:9 and 16:10 show more of the world at the sides with correct proportions. HUD counters move to the screen edges, and menus stay centred.
 
 **2× draw distance.** The world is visible twice as far, and characters and items four times as far as in the original. Distant objects fade in smoothly instead of popping in.
@@ -50,6 +52,9 @@ The time vortex between eras, BBLIT Remaster:
 - Bugs no longer sinks halfway into the stones he pushes. This bug dates back to the PS1 version: the stone's collision shape is offset from its model.
 - The time machine's carrot no longer sticks through the logo on the title screen.
 - The holes in the hub (LS01) no longer flicker or vanish: they are shallow pits under a solid ground mesh, now drawn over the ground as on the PS1.
+- A palm leaf right in front of the camera no longer cuts holes in Bugs, the time machine and the hub holes behind it.
+- No thin seams along the edges of leaves or square outlines inside the hub holes (the original PC port has them too).
+- The level-entrance vortices in the hub spin smoothly instead of twitching and "restarting" when you walk up to them.
 
 **Handheld PCs (Linux/Proton).** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On Windows its own scheduler handles this. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
 
