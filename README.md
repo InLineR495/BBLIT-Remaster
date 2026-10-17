@@ -47,7 +47,17 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
 
 ## Requirements
 
-- **The PC version of Bugs Bunny: Lost in Time with an unpatched `bugs.exe` v1.6.** Tested with the Russian edition (CITY, translated by "Дядюшка Рисёч"). If your `bugs.exe` is different, the mod switches itself off and the game runs as usual. `BIN\remaster.log` will then contain the line "не эталонный bugs.exe" ("not the reference bugs.exe").
+- **The PC version of Bugs Bunny: Lost in Time with an unpatched `bugs.exe` v1.6.** Tested with the Russian edition (CITY, translated by "Дядюшка Рисёч"). The supported `bugs.exe`:
+
+  | | |
+  |---|---|
+  | Version | 1.6 |
+  | Size | 772 096 bytes |
+  | SHA-256 | `7342f72443aad4f6efb366449f123dbe2baf7d45cbd1f3e8512aa70506512139` |
+  | MD5 | `6672ce79f18cf5110e00059d5f031a35` |
+  | CRC32 of `.text` (checked by the mod) | `ecffb7c9` |
+
+  To check your copy: on Windows run `certutil -hashfile bugs.exe SHA256` in the `BIN` folder, on Linux run `sha256sum bugs.exe`. If your `bugs.exe` is different, the mod switches itself off and the game runs as usual. `BIN\remaster.log` will then contain the line "не эталонный bugs.exe" ("not the reference bugs.exe"). Other releases with the same code (same `.text` CRC32) will also work. If yours doesn't, open an issue with its hash.
 - A GPU with **OpenGL 4.6**: Mesa (AMD, Intel) on Linux, or a current AMD, NVIDIA or Intel driver on Windows.
 - An XInput gamepad: Xbox-compatible, Steam Deck, Legion Go, or a DualSense through Steam Input. The keyboard works as in the original.
 

@@ -14,7 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install MinGW-w64 (i686)
         run: |
@@ -34,7 +34,7 @@ jobs:
           (cd pkg && zip -r "../BBLIT-Remaster-$VER.zip" .)
           sha256sum "BBLIT-Remaster-$VER.zip" build/ddraw.dll
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: BBLIT-Remaster-${{ env.VER }}
           path: pkg/

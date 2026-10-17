@@ -11,4 +11,4 @@ First public release: Bugs Bunny: Lost in Time on a modern renderer.
 
 **Install.** Extract the archive into the game folder (`ddraw.dll` and `remaster.ini` go into `BIN`) and run `BIN\bugs.exe /opengl /win /b0 /x800 /y600`. Under Linux/Proton, prepend `WINEDLLOVERRIDES="ddraw=n,b" PROTON_NO_NTSYNC=1 PROTON_NO_FSYNC=1 PROTON_NO_ESYNC=1 %command%`. Full instructions are in the README.
 
-**Beta.** Tested on Linux (Proton). Windows is untested, so reports in the issues with `BIN\remaster.log` are very welcome. Requires an unpatched `bugs.exe` 1.6 and an OpenGL 4.6 GPU.
+**Beta.** Tested on Linux (Proton). Windows is untested, so reports in the issues with `BIN\remaster.log` are very welcome. Requires an OpenGL 4.6 GPU and an unpatched `bugs.exe` 1.6 (772 096 bytes, SHA-256 `7342f72443aad4f6efb366449f123dbe2baf7d45cbd1f3e8512aa70506512139`).
