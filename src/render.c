@@ -1354,6 +1354,7 @@ static const char *const gpu_vs =
     "uniform float u_alpha, u_xs_world, u_xs_bb, u_fadek;\n"
     "uniform int u_fogs;\n"
     "out vec2 v_uv;\n"
+    "centroid out vec2 v_uvc;\n"                   // то же в точке внутри треугольника (MSAA, см. фрагментный)
     "out vec4 v_col;\n"
     "out float v_w;\n"                           // глубина вида (наш туман)
     "flat out vec4 v_colf;\n"
@@ -1367,7 +1368,7 @@ static const char *const gpu_vs =
     "        vec2 q = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
     "        gl_Position = vec4(q * 2.0 - 1.0, 1.0, 1.0);\n"
     "        v_w = 0.0; v_h = 0.0; v_fade = 1.0; v_nofog = 1.0; v_spr = 0.0;\n"
-    "        v_uv = vec2(0.0); v_col = vec4(1.0); v_colf = vec4(1.0);\n"
+    "        v_uv = v_uvc = vec2(0.0); v_col = vec4(1.0); v_colf = vec4(1.0);\n"
     "        return;\n"
     "    }\n"
     "    float t = u_alpha;\n"
@@ -1399,7 +1400,7 @@ static const char *const gpu_vs =
     "            c.a = float(min(255, ai * u_fogs / 10)) / 255.0;\n"
     "        }\n"
     "    }\n"
-    "    v_uv = mix(a_uv.xy, a_uv.zw, t);\n"
+    "    v_uv = v_uvc = mix(a_uv.xy, a_uv.zw, t);\n"
     "    v_col = c;\n"
     "    v_colf = c;\n"
     "    v_spr = a_flags.z;\n"
@@ -1408,6 +1409,7 @@ static const char *const gpu_vs =
 static const char *const gpu_fs =
     "#version 330 core\n"
     "in vec2 v_uv;\n"
+    "centroid in vec2 v_uvc;\n"
     "in vec4 v_col;\n"
     "in float v_w;\n"
     "flat in vec4 v_colf;\n"
@@ -1415,7 +1417,7 @@ static const char *const gpu_fs =
     "flat in float v_nofog;\n"
     "flat in float v_fade;\n"
     "uniform sampler2D u_smp, u_sky;\n"
-    "uniform int u_tex, u_flat, u_afunc, u_abr, u_fadd, u_stp;\n"
+    "uniform int u_tex, u_flat, u_afunc, u_abr, u_fadd, u_stp, u_centroid, u_clampuv;\n"
     "uniform float u_light, u_akill;\n"
     "uniform float u_aref, u_gain, u_fogD, u_fogS;\n"
     "in float v_h;\n"
@@ -1473,10 +1475,20 @@ static const char *const gpu_fs =
     "}\n"
     "void main() {\n"
     "    if (u_bgpass != 0) { o = vec4(background(), 1.0); return; }\n"
+    // MSAA: у пикселя на краю, покрытого частью сэмплов, шейдер считается в центре пикселя — вне треугольника; uv там
+    // экстраполированы за край и с REPEAT заворачивают на другую сторону текстуры: пунктир по краям полигонов —
+    // квадрат внутри норы, кромка листа у камеры, чёрточки между буквами HUD (пользователь, 2026-10-17). centroid —
+    // точка выборки внутри покрытой части.
+    "    vec2 uv = u_centroid != 0 ? v_uvc : v_uv;\n"
+    // Смешиваемое по альфе с uv в [0, 1] (кольцо норы — копии текстуры 435 по 0,01…0,99, лист у камеры): у края
+    // полигона билинейный фильтр с REPEAT брал противоположный край текстуры — прозрачную кайму, сквозь неё
+    // просвечивала земля: линии по периметру квада, «квадрат» в норе (так и в оригинале). Зажим на полтекселя внутрь.
+    // Тайлящиеся (uv за 1) и непрозрачные (земля: стык плиток должен фильтроваться через край) — как раньше.
+    "    if (u_clampuv != 0 && u_tex != 0) { vec2 h = 0.5 / vec2(textureSize(u_smp, 0)); uv = clamp(uv, h, 1.0 - h); }\n"
     "    if (v_fade < 1.0 && bayer4(ivec2(gl_FragCoord.xy)) > v_fade) discard;\n"
     "    vec4 col = u_flat != 0 ? v_colf : v_col;\n"
     "    if (u_abr < 0) {\n"
-    "        vec4 t = u_tex != 0 ? texture(u_smp, v_uv) : vec4(1.0);\n"
+    "        vec4 t = u_tex != 0 ? texture(u_smp, uv) : vec4(1.0);\n"
     "        vec4 f = t * col;\n"                   // GL_MODULATE (движок glTexEnv не вызывает)
     // PS1: тексель × цвет вершины / 128 (0x80 — нейтраль) с насыщением; порт делит на 255 — мир вдвое темнее PS1
     // (цвета вершин непрозрачного в LS01: 0x40–0x80). Мир и задник, кроме спрайтов (им порт ставит нейтраль 1,0).
@@ -1497,7 +1509,7 @@ static const char *const gpu_fs =
     // предел 1), потом билинейно с REPEAT, как GL_LINEAR движка. Слово палитры 0 (RGB≈0, α=0) — не покрытие;
     // 0x8000 (RGB=1, α=0) — покрытие с нулевым цветом: в режиме 0 гасит фон вдвое, как на PS1.
     "    ivec2 sz = textureSize(u_smp, 0);\n"
-    "    vec2 p = v_uv * vec2(sz) - 0.5, fl = floor(p), fr = p - fl;\n"
+    "    vec2 p = uv * vec2(sz) - 0.5, fl = floor(p), fr = p - fl;\n"
     "    float g = v_spr > 0.5 ? 1.0 : u_gain;\n"  // спрайтам ПК уже ставит 1.0 = нейтраль PS1 0x80
     "    vec3 F = vec3(0.0);\n"
     "    float cov = 0.0, dk = 0.0, co = 0.0;\n"
@@ -1544,6 +1556,7 @@ struct gpu_cmd {
     uint16_t state;
     int8_t abr;                     // режим текстуры-варианта, −1 — обычная
     uint8_t trans, wide;
+    uint8_t uvin;                   // uv всех граней в [0, 1] — у смешиваемых по альфе выборка зажимается (u_clampuv)
 };
 
 static struct gpu_vert gverts[BB_SNAP_MAX_VERTS];
@@ -1662,7 +1675,7 @@ static int prim_list(const struct bb_snapshot *b, const struct bb_prim *p)
 static unsigned gprog, gvao, gvbo, gibo, gpu_gen, gpu_trans_mode;
 static int gpu_state;               // 0 — не создан, 1 — готов, −1 — отказ (до нового контекста)
 static int u_bgpass, u_ci, u_vp, u_scr, u_hz, u_hzTop, u_hzThick, u_hzNear, u_hzFar, u_hzMax, u_hzA0, u_hzA1, u_hzCol;
-static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp, u_light, u_akill;
+static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp, u_light, u_akill, u_centroid, u_clampuv;
 
 static unsigned gpu_shader(unsigned type, const char *src)
 {
@@ -1724,7 +1737,7 @@ static int gpu_init(void)
         return 0;
     }
 #define U(v) (v = gx.GetUniformLocation(gprog, #v))
-    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp); U(u_light); U(u_akill);
+    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp); U(u_light); U(u_akill); U(u_centroid); U(u_clampuv);
     U(u_fogD); U(u_fogS); U(u_fadd); U(u_fadek);
     U(u_bgpass); U(u_ci); U(u_vp); U(u_scr); U(u_hz); U(u_hzTop); U(u_hzThick); U(u_hzNear); U(u_hzFar);
     U(u_hzMax); U(u_hzA0); U(u_hzA1); U(u_hzCol);
@@ -1860,11 +1873,11 @@ static void dump_pair(const struct bb_snapshot *a, const struct bb_snapshot *b)
     CloseHandle(f);
 }
 
-static void gpu_cmd_add(int list, uint32_t first, uint32_t n, uint16_t state, int abr, int trans, int wide)
+static void gpu_cmd_add(int list, uint32_t first, uint32_t n, uint16_t state, int abr, int trans, int wide, int uvin)
 {
     struct gpu_cmd *c = gncmd[list] ? &gcmd[list][gncmd[list] - 1] : NULL;
     if (c && c->first + c->count == first && c->state == state && c->abr == abr && c->trans == trans &&
-        c->wide == wide) {
+        c->wide == wide && c->uvin == uvin) {
         c->count += n;
         return;
     }
@@ -1875,6 +1888,7 @@ static void gpu_cmd_add(int list, uint32_t first, uint32_t n, uint16_t state, in
     c->abr = (int8_t)abr;
     c->trans = (uint8_t)trans;
     c->wide = (uint8_t)wide;
+    c->uvin = (uint8_t)uvin;
 }
 
 // --- M5b: плавное появление объектов ---
@@ -2247,7 +2261,7 @@ static uint32_t ghost_build(const struct bb_snapshot *a, const struct bb_snapsho
             ix[3] = nv; ix[4] = nv + 2; ix[5] = nv + 3;
             n = 6;
         }
-        gpu_cmd_add(5, ni, n, p->state, -1, 0, 0);
+        gpu_cmd_add(5, ni, n, p->state, -1, 0, 0, 0);
         nv += p->nverts;
         ni += n;
         p24_ghost++;
@@ -2498,7 +2512,12 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
         // тень — плоский квад на неровной земле: края уходили под холм, на бегу мелькали; её глубина подтянута к камере
         // в шейдере (список 4, рисуется до акторов)
         int trans = world && (is_translucent(b, p) || list == 4);   // тени и наклейки — без записи глубины
-        gpu_cmd_add(list, base, n, p->state, abr, trans, !world && (hud_anchor[i] || is_wide_overlay(b, p)));
+        int uvin = 1;
+        for (unsigned k = 0; k < p->nverts && uvin; k++) {
+            const float *q = gverts[p->first + k].uv;
+            uvin = q[0] >= 0.0f && q[0] <= 1.0f && q[1] >= 0.0f && q[1] <= 1.0f;
+        }
+        gpu_cmd_add(list, base, n, p->state, abr, trans, !world && (hud_anchor[i] || is_wide_overlay(b, p)), uvin);
     }
     uint32_t nvg = ghost_build(a, b, b->nverts, ntotal), nig = 0;
     for (uint32_t c = 0; c < gncmd[5]; c++)
@@ -2515,7 +2534,7 @@ static void gpu_pass(const struct bb_snapshot *s, int list, const int vp43[4], c
 {
     int world = list != 0;
     const struct bb_state *st_now = NULL;
-    int trans_now = -1, wide_now = -1, abr_now = -2, eq_now = GL_FUNC_ADD;
+    int trans_now = -1, wide_now = -1, abr_now = -2, eq_now = GL_FUNC_ADD, clamp_now = -1;
     if (list == 5)                  // грани A без B: состояния — из A
         s = m_a;
     for (uint32_t i = 0; s && i < gncmd[list]; i++) {
@@ -2577,6 +2596,11 @@ static void gpu_pass(const struct bb_snapshot *s, int list, const int vp43[4], c
             }
             gx.Uniform1i(u_abr, abr);
             abr_now = abr;
+        }
+        int clamp = bb_cfg.uv_clamp && c->uvin && st->caps & BB_CAP_TEXTURE && st->caps & BB_CAP_BLEND;
+        if (clamp != clamp_now) {
+            gx.Uniform1i(u_clampuv, clamp);
+            clamp_now = clamp;
         }
         // Смешивание по альфе текстуры без альфа-теста, вершины непрозрачны (лист пальмы LS01 у камеры, текстура 421):
         // такое идёт непрозрачным, с записью глубины, а прозрачные тексели (α 0 — фон текстуры, вблизи камеры почти
@@ -3348,6 +3372,7 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
         gx.Uniform1f(u_gain, bb_cfg.ps1_gain / 10.0f);
         gx.Uniform1i(u_stp, bb_cfg.ps1_stp);
         gx.Uniform1f(u_light, bb_cfg.ps1_light / 10.0f);
+        gx.Uniform1i(u_centroid, bb_cfg.uv_centroid);
         gx.Uniform1f(u_fadek, 1.0f / FADE_TICKS);
         gx.Uniform1f(u_fogD, 0.0f);
         gx.Uniform1f(u_fogS, (float)(bb_cfg.fog_start / 100.0));
