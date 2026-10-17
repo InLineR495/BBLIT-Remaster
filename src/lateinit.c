@@ -65,6 +65,7 @@ void bb_config_load(void)
     bb_cfg.shader = GetPrivateProfileIntA("remaster", "shader", 1, ini);
     bb_cfg.ps1_blend = GetPrivateProfileIntA("remaster", "ps1_blend", 1, ini);
     bb_cfg.ps1_gain = GetPrivateProfileIntA("remaster", "ps1_gain", 20, ini);
+    bb_cfg.ps1_stp = GetPrivateProfileIntA("remaster", "ps1_stp", 1, ini);
     bb_cfg.jump_k = GetPrivateProfileIntA("remaster", "jump_k", 10, ini);
     bb_cfg.repair = GetPrivateProfileIntA("remaster", "repair", 1, ini);
     bb_cfg.half_rate = GetPrivateProfileIntA("remaster", "half_rate", 1, ini);
@@ -180,7 +181,7 @@ void bb_config_live(void)
         { "cam_stick", &bb_cfg.cam_stick, 0, 1 }, { "cam_speed", &bb_cfg.cam_speed, 8, 160 },
         { "cam_invert", &bb_cfg.cam_invert, 0, 1 }, { "cam_swap", &bb_cfg.cam_swap, 0, 1 },
         { "sneak", &bb_cfg.sneak, 0, 90 },
-        { "fence", &bb_cfg.fence, 0, 1 }, { "p23", &bb_cfg.p23, 0, 1 }, { "vb_guard", &bb_cfg.vb_guard, 0, 150 }, { "hud_edges", &bb_cfg.hud_edges, 0, 1 }, { "title_logo", &bb_cfg.title_logo, 0, 100 }, { "decals", &bb_cfg.decals, 0, 1 }, { "push_r", &bb_cfg.push_r, 0, 200 }, { "log_sec", &bb_cfg.log_sec, 0, 1 },
+        { "fence", &bb_cfg.fence, 0, 1 }, { "p23", &bb_cfg.p23, 0, 1 }, { "vb_guard", &bb_cfg.vb_guard, 0, 150 }, { "hud_edges", &bb_cfg.hud_edges, 0, 1 }, { "title_logo", &bb_cfg.title_logo, 0, 100 }, { "decals", &bb_cfg.decals, 0, 1 }, { "ps1_stp", &bb_cfg.ps1_stp, 0, 1 }, { "push_r", &bb_cfg.push_r, 0, 200 }, { "log_sec", &bb_cfg.log_sec, 0, 1 },
     };
     for (unsigned k = 0; k < sizeof in_keys / sizeof in_keys[0]; k++) {   // M6: ввод на лету
         int v = GetPrivateProfileIntA("live", in_keys[k].key, -1, ini);

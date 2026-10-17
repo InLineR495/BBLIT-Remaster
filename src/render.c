@@ -1408,7 +1408,7 @@ static const char *const gpu_fs =
     "flat in float v_nofog;\n"
     "flat in float v_fade;\n"
     "uniform sampler2D u_smp, u_sky;\n"
-    "uniform int u_tex, u_flat, u_afunc, u_abr, u_fadd;\n"
+    "uniform int u_tex, u_flat, u_afunc, u_abr, u_fadd, u_stp;\n"
     "uniform float u_aref, u_gain, u_fogD, u_fogS;\n"
     "in float v_h;\n"
     "uniform int u_bgpass;\n"
@@ -1485,7 +1485,12 @@ static const char *const gpu_fs =
     "    vec2 p = v_uv * vec2(sz) - 0.5, fl = floor(p), fr = p - fl;\n"
     "    float g = v_spr > 0.5 ? 1.0 : u_gain;\n"  // спрайтам ПК уже ставит 1.0 = нейтраль PS1 0x80
     "    vec3 F = vec3(0.0);\n"
-    "    float cov = 0.0, dk = 0.0;\n"
+    "    float cov = 0.0, dk = 0.0, co = 0.0;\n"
+    "    vec3 Fo = vec3(0.0);\n"
+    // тексель без бита STP на PS1 непрозрачен и в полупрозрачном полигоне; порт кодирует режим альфой варианта, и у
+    // смешиваемых текселей она не выше max/2 (ABR 0), 0,75·max (1), max/4 (3) — альфа выше предела = непрозрачный
+    // тексель (силуэты корабля и пальм у горизонта LS01: на PS1 тёмные, сложением выходили бледными)
+    "    float alim = u_abr == 0 ? 0.52 : u_abr == 1 ? 0.76 : u_abr == 3 ? 0.26 : 2.0;\n"
     "    for (int k = 0; k < 4; k++) {\n"
     "        ivec2 d = ivec2(k & 1, k >> 1);\n"
     "        vec2 q = fl + vec2(d);\n"
@@ -1493,14 +1498,16 @@ static const char *const gpu_fs =
     "        vec4 T = texelFetch(u_smp, clamp(ivec2(q), ivec2(0), sz - 1), 0);\n"
     "        if (T.a <= 0.0 && max(T.r, max(T.g, T.b)) < 0.5) continue;\n"
     "        float w = (d.x == 1 ? fr.x : 1.0 - fr.x) * (d.y == 1 ? fr.y : 1.0 - fr.y);\n"
+    "        if (u_stp != 0 && T.a > alim) { Fo += w * min(T.rgb * col.rgb * g, vec3(1.0)); co += w; continue; }\n"
     "        cov += w;\n"
     // вычитание, тексель с цветом ~0 и формой в альфе (тени: tex 133) — затемнение по альфе, как ПК-порт: dst·(1 − α)
     "        if (u_abr == 2 && max(T.r, max(T.g, T.b)) < 0.25 * T.a) { dk += w * T.a; continue; }\n"
     "        F += w * min(ps1_color(T) * col.rgb * g, vec3(1.0));\n"
     "    }\n"
-    "    if (cov <= 0.0) discard;\n"
+    "    if (cov + co <= 0.0) discard;\n"
     "    F *= col.a;\n"                              // затухание в тумане движка
     "    o = u_abr == 0 ? vec4(0.5 * F, 0.5 * cov * col.a) : vec4(u_abr == 3 ? 0.25 * F : F, u_abr == 2 ? dk * col.a : 0.0);\n"
+    "    o += vec4(Fo, co) * col.a;\n"              // непрозрачные тексели — поверх (премультипликация)
     "    float fg = fogf();\n"                       // премультипликация: к заднику с весом своей альфы (у сложения — гаснет)
     "    float hf = hazef();\n"
     "    if (hf > 0.0) { if (u_abr == 2) o *= 1.0 - hf; else o.rgb = mix(o.rgb, hazecol() * o.a, hf); }\n"
@@ -1640,7 +1647,7 @@ static int prim_list(const struct bb_snapshot *b, const struct bb_prim *p)
 static unsigned gprog, gvao, gvbo, gibo, gpu_gen, gpu_trans_mode;
 static int gpu_state;               // 0 — не создан, 1 — готов, −1 — отказ (до нового контекста)
 static int u_bgpass, u_ci, u_vp, u_scr, u_hz, u_hzTop, u_hzThick, u_hzNear, u_hzFar, u_hzMax, u_hzA0, u_hzA1, u_hzCol;
-static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd;
+static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp;
 
 static unsigned gpu_shader(unsigned type, const char *src)
 {
@@ -1702,7 +1709,7 @@ static int gpu_init(void)
         return 0;
     }
 #define U(v) (v = gx.GetUniformLocation(gprog, #v))
-    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain);
+    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp);
     U(u_fogD); U(u_fogS); U(u_fadd); U(u_fadek);
     U(u_bgpass); U(u_ci); U(u_vp); U(u_scr); U(u_hz); U(u_hzTop); U(u_hzThick); U(u_hzNear); U(u_hzFar);
     U(u_hzMax); U(u_hzA0); U(u_hzA1); U(u_hzCol);
@@ -3305,6 +3312,7 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
         double fog_d = s->fog_d > 0 && bb_cfg.fog ? s->fog_d * s->fog_m : 0;
         gx.Uniform1i(u_fogs, fog_d > 0 ? 10 : bb_cfg.fog_sharp);
         gx.Uniform1f(u_gain, bb_cfg.ps1_gain / 10.0f);
+        gx.Uniform1i(u_stp, bb_cfg.ps1_stp);
         gx.Uniform1f(u_fadek, 1.0f / FADE_TICKS);
         gx.Uniform1f(u_fogD, 0.0f);
         gx.Uniform1f(u_fogS, (float)(bb_cfg.fog_start / 100.0));

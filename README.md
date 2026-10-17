@@ -32,6 +32,7 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
 - PS1 transparency (water, glass, effects) uses the proper blending modes instead of the PC port's alpha fakes, so it no longer flickers.
 - The cracks where you could see the sky through bends in cliffs are closed.
 - No holes or torn edges at the screen border when you swing the camera.
+- Texels that are opaque on the PS1 stay opaque inside semi-transparent polygons, so the ship and palm-island silhouettes on the horizon are dark, as on the PS1.
 
 **Modern gamepad controls (XInput).**
 - Analogue movement: tilt the stick slightly to walk, fully to run.
@@ -42,6 +43,7 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
 **Fixes.**
 - Bugs no longer sinks halfway into the stones he pushes. This bug dates back to the PS1 version: the stone's collision shape is offset from its model.
 - The time machine's carrot no longer sticks through the logo on the title screen.
+- The holes in the hub (LS01) no longer flicker or vanish: they are shallow pits under a solid ground mesh, now drawn over the ground as on the PS1.
 
 **Handheld PCs.** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
 
