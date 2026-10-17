@@ -55,7 +55,7 @@ void bb_config_load(void)
     bb_cfg.p23 = GetPrivateProfileIntA("remaster", "p23", 0, ini);
     bb_cfg.vb_guard = GetPrivateProfileIntA("remaster", "vb_guard", 110, ini);
     bb_cfg.hud_edges = GetPrivateProfileIntA("remaster", "hud_edges", 1, ini);
-    bb_cfg.title_logo = GetPrivateProfileIntA("remaster", "title_logo", 60, ini);
+    bb_cfg.title_logo = GetPrivateProfileIntA("remaster", "title_logo", 85, ini);
     bb_cfg.push_r = GetPrivateProfileIntA("remaster", "push_r", 50, ini);
     bb_cfg.log_sec = GetPrivateProfileIntA("remaster", "log_sec", 0, ini);
     bb_cfg.fps = GetPrivateProfileIntA("remaster", "fps", 0, ini);

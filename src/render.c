@@ -1924,22 +1924,33 @@ static void hud_scan(const struct bb_snapshot *b)
     }
 }
 
-// --- Титул: логотип ближе к камере ---
-// Логотип титула (уровень 0) — плоский актор в сцене на глубине ~2140, морковка машины времени (до ~2060) его протыкает
-// (так и в оригинале). Глубина его вершин умножается на title_logo/100: на экране он тот же (x, y — экранные),
-// но стоит перед машиной. Логотип — плоский (разброс z < 3 %) актор из 4–64 вершин в верхней половине кадра
-// (плашка «CITY…» внизу — тоже плоская, её не трогаем). Замер 2026-10-17: 24 вершины, z −2160…−2120, y 0,31…0,83.
-static uint32_t title_obj;
+// --- Титул: плашки ближе к камере ---
+// Логотип титула (уровень 0) — плоский актор в сцене (z −2160…−2120), морковка машины времени (до −2062) его протыкает
+// (так и в оригинале). Панель меню («Загрузка / Новая игра / Выход», слоты) — тоже плоский актор, z −2000, перед
+// логотипом; плашка «CITY…» внизу — z −871. Глубина всех крупных плоских акторов умножается на title_logo/100:
+// на экране они те же (x, y — экранные), порядок между собой сохраняется (общий множитель), а машина — позади.
+// 85 %: логотип −1836…−1802 перед машиной (её ближние части −1916…−2062), панель −1700 — за Багзом (−1200…−1290,
+// кончики ушей заходят на рамку панели; при 60 % панель закрывала бы их).
+// Плашка: актор из 4–64 вершин, разброс z < 3 %, шире 0,5 экрана. Замер 2026-10-17 (снимок кадра меню).
+#define TITLE_MAX 8
+static uint32_t title_objs[TITLE_MAX], title_n;
+
+static int title_has(uint32_t obj)
+{
+    for (uint32_t i = 0; i < title_n; i++)
+        if (title_objs[i] == obj)
+            return 1;
+    return 0;
+}
 
 static void title_scan(const struct bb_snapshot *b)
 {
-    uint32_t ram = *(volatile uint32_t *)(uintptr_t)0x52fd00u, found = 0, tried[64], ntried = 0;
-    static uint32_t logged;
-    if (bb_cfg.title_logo <= 0 || bb_cfg.title_logo >= 100 || !ram || *(volatile uint32_t *)(uintptr_t)(ram + 0x10000) != 0) {
-        title_obj = 0;
+    uint32_t ram = *(volatile uint32_t *)(uintptr_t)0x52fd00u, tried[64], ntried = 0;
+    static uint32_t logged_n, logged_sum;
+    title_n = 0;
+    if (bb_cfg.title_logo <= 0 || bb_cfg.title_logo >= 100 || !ram || *(volatile uint32_t *)(uintptr_t)(ram + 0x10000) != 0)
         return;
-    }
-    for (uint32_t i = 0; i < b->nprims && !found; i++) {
+    for (uint32_t i = 0; i < b->nprims && title_n < TITLE_MAX; i++) {
         const struct bb_vert *v0 = &b->verts[b->prims[i].first];
         if (v0->tag != BB_TAG_ACTOR || !v0->obj)
             continue;
@@ -1952,7 +1963,7 @@ static void title_scan(const struct bb_snapshot *b)
             break;
         tried[ntried++] = v0->obj;
         uint32_t nv = 0;
-        float y0 = 1e9f, y1 = -1e9f, z0 = 1e9f, z1 = -1e9f, q[2];
+        float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f, q[2];
         for (uint32_t j = i; j < b->nprims; j++) {
             const struct bb_prim *p = &b->prims[j];
             if (b->verts[p->first].obj != v0->obj)
@@ -1960,18 +1971,21 @@ static void title_scan(const struct bb_snapshot *b)
             for (unsigned k = 0; k < p->nverts; k++) {
                 const struct bb_vert *v = &b->verts[p->first + k];
                 ndc_xy(v->x, v->y, b->states[p->state].ortho, q);
-                y0 = fminf(y0, q[1]); y1 = fmaxf(y1, q[1]);
+                x0 = fminf(x0, q[0]); x1 = fmaxf(x1, q[0]);
                 z0 = fminf(z0, v->z); z1 = fmaxf(z1, v->z);
                 nv++;
             }
         }
-        if (nv >= 4 && nv <= 64 && z1 < 0 && z1 - z0 < -z1 * 0.03f && y0 > 0.1f && y1 - y0 > 0.2f)
-            found = v0->obj;
+        if (nv >= 4 && nv <= 64 && z1 < 0 && z1 - z0 < -z1 * 0.03f && x1 - x0 > 0.5f)
+            title_objs[title_n++] = v0->obj;
     }
-    title_obj = found;
-    if (found != logged) {
-        logged = found;
-        bb_log("титул: логотип %08x ближе к камере, глубина ×%d%%", found, bb_cfg.title_logo);
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < title_n; i++)
+        sum += title_objs[i];
+    if (title_n != logged_n || sum != logged_sum) {
+        logged_n = title_n;
+        logged_sum = sum;
+        bb_log("титул: плашек ближе к камере %u (глубина ×%d%%)", title_n, bb_cfg.title_logo);
     }
 }
 
@@ -2308,7 +2322,7 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
             } else {
                 memcpy(g->pa, g->pb, sizeof g->pa);
             }
-            if (world && title_obj && v->obj == title_obj) {   // логотип титула — ближе к камере
+            if (world && title_n && title_has(v->obj)) {      // плашки титула — ближе к камере
                 g->pa[2] *= (float)bb_cfg.title_logo / 100.0f;
                 g->pb[2] *= (float)bb_cfg.title_logo / 100.0f;
             }
