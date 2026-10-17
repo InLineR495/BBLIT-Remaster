@@ -796,7 +796,12 @@ static void repair_objects(const struct bb_snapshot *a, const struct bb_snapshot
 // на «середину шага при камере A» C_A·((w_X1 + w_A)/2 − e_A), X1 — поза в начале шага (прошлая пара). Половины
 // сходятся в середине; при неподвижной камере это ровно t = α/2 и t = (1+α)/2.
 #define HR_BITS 12
-static struct hr_obj { uint32_t obj, build, seen; uint8_t hist; } hr_tab[1 << HR_BITS];
+// Захват держится HR_LOCK пар после последнего полного шаблона: у движка фаза анимации сдвигается (два шага подряд —
+// вихрь LS01, запись 2026-10-17), а полный шаблон снова набирается 6 пар — всё это время вихрь шёл рывками 23°/0°.
+// В захвате хватает двух последних пар: движение после покоя — первая половина, покой после движения — вторая,
+// два движения подряд после первой половины — продолжение от её середины (без скачка назад).
+#define HR_LOCK 16
+static struct hr_obj { uint32_t obj, build, seen, lockb; uint8_t hist, lock; } hr_tab[1 << HR_BITS];
 static uint32_t hr_used, hr_prev_build;
 static int8_t vhalf[BB_SNAP_MAX_VERTS];          // 0 — обычная, 1 — первая половина шага (B заменён), 2 — вторая (A заменён)
 static float hr_pos[BB_SNAP_MAX_VERTS][3];       // заменённая позиция (экранные X, Y и Z вида)
@@ -814,8 +819,8 @@ static struct hr_obj *hr_find(uint32_t obj, int add)
         if (!add)
             return NULL;
         hr_tab[h].obj = obj;
-        hr_tab[h].build = hr_tab[h].seen = 0;
-        hr_tab[h].hist = 0;
+        hr_tab[h].build = hr_tab[h].seen = hr_tab[h].lockb = 0;
+        hr_tab[h].hist = hr_tab[h].lock = 0;
         hr_used++;
     }
     return &hr_tab[h];
@@ -922,10 +927,18 @@ static void half_rate(const struct bb_snapshot *a, const struct bb_snapshot *b, 
         if (!o || o->build != b->build_id)
             continue;
         unsigned h = o->hist & 63u;
+        if (o->lockb != b->build_id) {
+            o->lockb = b->build_id;
+            if (h == 21u || h == 42u)
+                o->lock = HR_LOCK;
+            else if (o->lock)
+                o->lock--;
+        }
+        int lk = bb_cfg.half_lock && o->lock;
         double pa[3], pb[3], wa[3], q[3];
         to_view(u, ih, pa);
         to_view(&v->x, ih, pb);
-        if (h == 21u) {                             // 010101: движение после покоя — первая половина
+        if (h == 21u || (lk && (h & 3u) == 1u)) {   // 010101: движение после покоя — первая половина
             hr_world(&ka, pa, wa);
             hr_view(&kb, wa, q);                    // поза A при камере B
             for (int r = 0; r < 3; r++)
@@ -936,7 +949,7 @@ static void half_rate(const struct bb_snapshot *a, const struct bb_snapshot *b, 
                 hr_w1[hr_cur][i][r] = (float)wa[r];
             hr_w1ok[hr_cur][i] = 1;
             vhalf[i] = 1;
-        } else if (h == 42u && w1_valid && match_idx[i] >= 0 && hr_w1ok[prev][match_idx[i]]) {
+        } else if ((h == 42u || (lk && (h & 2u))) && w1_valid && match_idx[i] >= 0 && hr_w1ok[prev][match_idx[i]]) {
             const float *w1 = hr_w1[prev][match_idx[i]];
             double w[3] = { w1[0], w1[1], w1[2] };
             hr_view(&ka, w, q);                     // поза X1 при камере A
@@ -1062,6 +1075,286 @@ static void p17_log(void)
     p17_pairs = p17_objs = p17_n = p18_n = p18_wstill = p18_vstill = 0;
 }
 
+// Поворот на большой угол за тик: вихрь над норой LS01 (веер из 8 секторов, текстура вращается с ним) время от времени
+// перескакивает на 90–180° (запись 2026-10-17: внешний слой +140…165°, внутренний −80…−97° за тик). В оригинале это
+// смена кадра, на закрученной текстуре незаметная; линейная интерполяция вела вершины по хордам — в середине тика вихрь
+// сжимался до 35 % и раскрывался («подходишь — анимация сбрасывается и крутится заново»). Мера — размер объекта в
+// середине тика (среднее |(r_A + r_B)/2| от центра) против концов; меньше 0,85 (поворот > ~63°) — объект шагом, как
+// скачок. Только полупрозрачные эффекты: части Багза на разворотах дают ту же меру (до 0,03 — проверка по записи),
+// а шагом их рисовать нельзя.
+#define SP_BITS 12
+static uint32_t sp_obj[1 << SP_BITS], sp_n[1 << SP_BITS];
+static uint8_t sp_fx[BB_SNAP_MAX_VERTS];                // вершина полупрозрачного примитива мира
+static int is_translucent(const struct bb_snapshot *s, const struct bb_prim *p);
+
+static void fx_mark(const struct bb_snapshot *b)
+{
+    memset(sp_fx, 0, b->nverts);
+    for (uint32_t i = 0; i < b->nprims; i++) {
+        const struct bb_prim *p = &b->prims[i];
+        if (is_world(&b->verts[p->first]) && is_translucent(b, p) && p->first + p->nverts <= b->nverts)
+            memset(&sp_fx[p->first], 1, p->nverts);
+    }
+}
+static double sp_c[1 << SP_BITS][6], sp_r[1 << SP_BITS][3];
+
+static int sp_slot(uint32_t obj)
+{
+    uint32_t h = (obj * 2654435761u) >> (32 - SP_BITS), k = 0;
+    while (sp_obj[h] && sp_obj[h] != obj) {
+        h = (h + 1) & ((1u << SP_BITS) - 1);
+        if (++k >> SP_BITS)
+            return -1;
+    }
+    sp_obj[h] = obj;
+    return (int)h;
+}
+
+static void spin_snap(const struct bb_snapshot *a, const struct bb_snapshot *b, double ih)
+{
+    memset(sp_obj, 0, sizeof sp_obj);
+    memset(sp_n, 0, sizeof sp_n);
+    memset(sp_c, 0, sizeof sp_c);
+    memset(sp_r, 0, sizeof sp_r);
+    fx_mark(b);
+    for (int pass = 0; pass < 3; pass++) {      // центры A и B, радиусы (A, B, середина), отметка
+        for (uint32_t i = 0; i < b->nverts; i++) {
+            const struct bb_vert *v = &b->verts[i];
+            int32_t j = match_idx[i];
+            if (!v->obj || j < 0 || vjump[i] || !sp_fx[i])
+                continue;
+            int h = sp_slot(v->obj);
+            if (h < 0)
+                continue;
+            if (pass == 2) {
+                double ends = 0.5 * (sp_r[h][0] + sp_r[h][1]);
+                if (sp_n[h] >= 4 && ends > 4.0 * sp_n[h] && sp_r[h][2] < 0.85 * ends) {   // средний радиус > 4 ед.
+                    vjump[i] = 1;
+                    bb_p14_jump[v->tag & 15]++;
+                    bad_nj[bad_add(v->obj)]++;
+                }
+                continue;
+            }
+            double pa[3], pb[3];
+            to_view(&a->verts[j].x, ih, pa);
+            to_view(&v->x, ih, pb);
+            if (pass == 0) {
+                for (int r = 0; r < 3; r++) {
+                    sp_c[h][r] += pa[r];
+                    sp_c[h][3 + r] += pb[r];
+                }
+                sp_n[h]++;
+                continue;
+            }
+            double na = 0, nb = 0, nm = 0;
+            for (int r = 0; r < 3; r++) {
+                double ra = pa[r] - sp_c[h][r], rb = pb[r] - sp_c[h][3 + r];
+                na += ra * ra;
+                nb += rb * rb;
+                nm += 0.25 * (ra + rb) * (ra + rb);
+            }
+            sp_r[h][0] += sqrt(na);
+            sp_r[h][1] += sqrt(nb);
+            sp_r[h][2] += sqrt(nm);
+        }
+        if (pass == 0)
+            for (uint32_t h = 0; h < (1u << SP_BITS); h++)
+                for (int r = 0; sp_n[h] && r < 6; r++)
+                    sp_c[h][r] /= sp_n[h];
+    }
+}
+
+// Скачок фазы вращения эффекта — спрятать. Вихрь над норой (два слоя: ~24° и ~47° за шаг анимации, шаг через тик)
+// иногда проскакивает сразу несколько шагов (×6 — 142° и −78° за тик, запись 2026-10-17). В оригинале (15 Гц, рывками)
+// это незаметно, у нас на ровном вращении — «шаг одним кадром» и пауза ~67 мс («дёргается, но меньше»). Фаза
+// закрученного вихря не видна: проскок поворачивается обратно вокруг центра и оси объекта, сдвиг фазы копится (off)
+// и применяется к следующим тикам — вращение идёт обычным шагом. Только полупрозрачные плоские (воронка — тоже) жёсткие,
+// уже провернувшиеся в одну сторону на полуоборот (маятник — нет: разворот сбрасывает историю).
+// Вершины B правятся на месте (в мире).
+#define SH_BITS 10
+#define SH_PI 3.14159265358979323846
+static struct sh_obj { uint32_t obj, last; double n[3], step, turn, off; } sh_tab[1 << SH_BITS];
+static uint32_t sh_used, sh_build;
+static const struct bb_snapshot *sh_snap;
+
+static struct sh_obj *sh_find(uint32_t obj, uint32_t build)
+{
+    if (sh_used > (1u << SH_BITS) / 2) {            // переполнение: давно не виденные — вон
+        static struct sh_obj old[1 << SH_BITS];
+        memcpy(old, sh_tab, sizeof old);
+        memset(sh_tab, 0, sizeof sh_tab);
+        sh_used = 0;
+        for (uint32_t i = 0; i < (1u << SH_BITS); i++)
+            if (old[i].obj && old[i].last + 2 >= build)
+                *sh_find(old[i].obj, build) = old[i];
+    }
+    uint32_t h = (obj * 2654435761u) >> (32 - SH_BITS);
+    while (sh_tab[h].obj && sh_tab[h].obj != obj)
+        h = (h + 1) & ((1u << SH_BITS) - 1);
+    if (!sh_tab[h].obj) {
+        memset(&sh_tab[h], 0, sizeof sh_tab[h]);
+        sh_tab[h].obj = obj;
+        sh_used++;
+    }
+    return &sh_tab[h];
+}
+
+static void rot_axis(const double *n, double ang, const double *r, double *o)   // Родриг: r вокруг n на ang
+{
+    double c = cos(ang), sn = sin(ang), d = n[0] * r[0] + n[1] * r[1] + n[2] * r[2];
+    double x[3] = { n[1] * r[2] - n[2] * r[1], n[2] * r[0] - n[0] * r[2], n[0] * r[1] - n[1] * r[0] };
+    for (int k = 0; k < 3; k++)
+        o[k] = r[k] * c + x[k] * sn + n[k] * d * (1 - c);
+}
+
+static double wrap_pi(double x)
+{
+    while (x > SH_PI)
+        x -= 2 * SH_PI;
+    while (x <= -SH_PI)
+        x += 2 * SH_PI;
+    return x;
+}
+
+static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, double ih)
+{
+    static double cov[1 << SP_BITS][6], acc[1 << SP_BITS][4];  // ковариация B; Σ a·b, Σ (a×b)·n, Σ|a|², Σ|b|²
+    static double nrm[1 << SP_BITS][3], rot[1 << SP_BITS];
+    struct hr_cam ka, kb;
+    if (sh_snap == b && sh_build == b->build_id)    // B уже поправлен (пара пересчитывается — jump_k и т. п.)
+        return;
+    sh_snap = b;
+    sh_build = b->build_id;
+    if (!hr_cam_of(a, &ka) || !hr_cam_of(b, &kb))
+        return;
+    fx_mark(b);
+    memset(sp_obj, 0, sizeof sp_obj);
+    memset(sp_n, 0, sizeof sp_n);
+    memset(sp_c, 0, sizeof sp_c);
+    memset(cov, 0, sizeof cov);
+    memset(acc, 0, sizeof acc);
+    memset(rot, 0, sizeof rot);
+    // 0 — центры A и B (мир); 1 — ковариация B → нормаль; 2 — угол A→B в плоскости (B со сдвигом фазы) → решение;
+    // 3 — вершины B повернуть на −сдвиг вокруг центра
+    for (int pass = 0; pass < 4; pass++) {
+        for (uint32_t i = 0; i < b->nverts; i++) {
+            const struct bb_vert *v = &b->verts[i];
+            int32_t j = match_idx[i];
+            if (!v->obj || j < 0 || !sp_fx[i])
+                continue;
+            int h = sp_slot(v->obj);
+            if (h < 0 || (pass > 0 && sp_n[h] < 4))
+                continue;
+            double pa[3], pb[3], wa[3], wb[3], ra[3], rb[3];
+            to_view(&a->verts[j].x, ih, pa);
+            to_view(&v->x, ih, pb);
+            hr_world(&ka, pa, wa);
+            hr_world(&kb, pb, wb);
+            if (pass == 0) {
+                for (int r = 0; r < 3; r++) {
+                    sp_c[h][r] += wa[r];
+                    sp_c[h][3 + r] += wb[r];
+                }
+                sp_n[h]++;
+                continue;
+            }
+            for (int r = 0; r < 3; r++) {
+                ra[r] = wa[r] - sp_c[h][r];
+                rb[r] = wb[r] - sp_c[h][3 + r];
+            }
+            const double *n = nrm[h];
+            if (pass == 1) {
+                cov[h][0] += rb[0] * rb[0]; cov[h][1] += rb[0] * rb[1]; cov[h][2] += rb[0] * rb[2];
+                cov[h][3] += rb[1] * rb[1]; cov[h][4] += rb[1] * rb[2]; cov[h][5] += rb[2] * rb[2];
+            } else if (pass == 2) {
+                double q[3], a2[3], b2[3];
+                rot_axis(n, -sh_find(v->obj, b->build_id)->off, rb, q);
+                double da = ra[0] * n[0] + ra[1] * n[1] + ra[2] * n[2], db = q[0] * n[0] + q[1] * n[1] + q[2] * n[2];
+                for (int r = 0; r < 3; r++) {
+                    a2[r] = ra[r] - da * n[r];
+                    b2[r] = q[r] - db * n[r];
+                }
+                acc[h][0] += a2[0] * b2[0] + a2[1] * b2[1] + a2[2] * b2[2];
+                acc[h][1] += n[0] * (a2[1] * b2[2] - a2[2] * b2[1]) + n[1] * (a2[2] * b2[0] - a2[0] * b2[2]) +
+                             n[2] * (a2[0] * b2[1] - a2[1] * b2[0]);
+                acc[h][2] += a2[0] * a2[0] + a2[1] * a2[1] + a2[2] * a2[2];
+                acc[h][3] += b2[0] * b2[0] + b2[1] * b2[1] + b2[2] * b2[2];
+            } else if (rot[h] != 0) {
+                double q[3], w[3], vv[3];
+                float f[3];
+                rot_axis(n, rot[h], rb, q);
+                for (int r = 0; r < 3; r++)
+                    w[r] = q[r] + sp_c[h][3 + r];
+                hr_view(&kb, w, vv);
+                if (!hr_screen(vv, ih, f))
+                    continue;
+                struct bb_vert *bv = (struct bb_vert *)&b->verts[i];
+                bv->x = f[0];
+                bv->y = f[1];
+                bv->z = f[2];
+            }
+        }
+        if (pass == 0) {
+            for (uint32_t h = 0; h < (1u << SP_BITS); h++)
+                for (int r = 0; sp_n[h] && r < 6; r++)
+                    sp_c[h][r] /= sp_n[h];
+        } else if (pass == 1) {                     // нормаль — наименьшая ось ковариации; знак — как в прошлом тике
+            for (uint32_t h = 0; h < (1u << SP_BITS); h++) {
+                if (!sp_obj[h] || sp_n[h] < 4)
+                    continue;
+                double m[3][3] = { { cov[h][0], cov[h][1], cov[h][2] }, { cov[h][1], cov[h][3], cov[h][4] },
+                                   { cov[h][2], cov[h][4], cov[h][5] } }, ev[3][3];
+                eig3(m, ev);
+                int k0 = 0;
+                for (int k = 1; k < 3; k++)
+                    if (m[k][k] < m[k0][k0])
+                        k0 = k;
+                double big = fmax(fmax(m[0][0], m[1][1]), m[2][2]);
+                // ось — наименьшая ось ковариации; внешний слой вихря — неглубокая воронка (центр ниже кольца
+                // на ~0,3 R, центр повторён в каждом из 8 треугольников): ~0,06 — осевую долю всё равно отбрасываем
+                if (big <= 0 || m[k0][k0] > 0.3 * big) {    // ось не выделена — не трогаем
+                    sp_n[h] = 0;
+                    continue;
+                }
+                const struct sh_obj *o = sh_find(sp_obj[h], b->build_id);
+                double n[3] = { ev[0][k0], ev[1][k0], ev[2][k0] };
+                double sg = o->last + 2 >= b->build_id ? n[0] * o->n[0] + n[1] * o->n[1] + n[2] * o->n[2] : -n[1];
+                for (int r = 0; r < 3; r++)
+                    nrm[h][r] = sg < 0 ? -n[r] : n[r];
+            }
+        } else if (pass == 2) {                     // решение по объектам
+            for (uint32_t h = 0; h < (1u << SP_BITS); h++) {
+                if (!sp_obj[h] || sp_n[h] < 4)
+                    continue;
+                struct sh_obj *o = sh_find(sp_obj[h], b->build_id);
+                if (o->last + 2 < b->build_id)      // не было — история заново
+                    o->step = o->turn = o->off = 0;
+                o->last = b->build_id;
+                memcpy(o->n, nrm[h], sizeof o->n);
+                double sa = acc[h][2], res = sa + acc[h][3] - 2 * sqrt(acc[h][0] * acc[h][0] + acc[h][1] * acc[h][1]);
+                if (sa < 16.0 * sp_n[h] || res > 0.02 * sa) {   // точка или не жёсткий — без истории
+                    o->step = o->turn = 0;
+                } else {
+                    double th = atan2(acc[h][1], acc[h][0]), r = o->step != 0 ? th / o->step : 0;
+                    if (fabs(th) <= 0.5 * SH_PI / 180) {
+                        // покой (анимация через тик)
+                    } else if (o->step == 0 || (r <= -0.6 && r >= -1.4)) {
+                        o->step = th;               // новая история; разворот (маятник) — тоже
+                        o->turn = th;
+                    } else if (r >= 0.4 && r <= 1.8) {
+                        o->step += 0.3 * (th - o->step);   // обычный шаг (скорость плавает: 19–30° у внешнего слоя)
+                        o->turn += th;
+                    } else if (fabs(o->turn) >= SH_PI) {
+                        o->off = wrap_pi(o->off + wrap_pi(th - o->step));   // проскок — шаг как обычно
+                        o->turn += o->step;
+                    }                               // проскок до полуоборота в одну сторону — как есть
+                }
+                rot[h] = -o->off;
+            }
+        }
+    }
+}
+
 // Пара снимков сменилась (30 раз в секунду): сопоставление, скачки и «плохие» объекты — от α не зависят.
 // P14 считается здесь же, по разу на пару.
 static uint32_t pair_gen;
@@ -1085,6 +1378,8 @@ static void prepare_pair(const struct bb_snapshot *a, const struct bb_snapshot *
     int32_t hi = *(volatile int32_t *)(uintptr_t)0x4efb30u;
     double ih = 1.0 / (hi > 0 ? hi : 400);
     build_match(a, b);
+    if (bb_cfg.spin_hide)
+        spin_hide(a, b, ih);
     memset(bad_obj, 0, sizeof bad_obj);
     memset(bad_nv, 0, sizeof bad_nv); memset(bad_nm, 0, sizeof bad_nm);
     memset(bad_nj, 0, sizeof bad_nj); memset(bad_tex, 0, sizeof bad_tex);
@@ -1119,6 +1414,8 @@ static void prepare_pair(const struct bb_snapshot *a, const struct bb_snapshot *
             bad_nj[bad_add(v->obj)]++;
         }
     }
+    if (bb_cfg.spin_snap)
+        spin_snap(a, b, ih);
     if (bb_cfg.repair)
         repair_objects(a, b, ih, k);
     if (bb_cfg.half_rate)
