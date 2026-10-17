@@ -10,7 +10,7 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
 
 ## Before / after
 
-"Wabbit on the run!", same spot and camera. Top: the original (4:3, stock draw distance). Bottom: BBLIT Remaster (widescreen, 2× draw distance, ground haze).
+"Wabbit on the run!", same spot and camera. Top: the original (4:3, stock draw distance). Bottom: BBLIT Remaster (widescreen, 2× draw distance, ground haze, PS1 brightness).
 
 ![Original](docs/l01a-original.jpg)
 ![BBLIT Remaster](docs/l01a-remaster.jpg)
@@ -148,7 +148,6 @@ The main settings live in `BIN\remaster.ini` and are commented there. The `[live
 - At a low TDP, the heaviest scenes occasionally (about once per second) repeat one frame.
 - Windows is untested.
 - Only an unpatched `bugs.exe` 1.6 is supported.
-- The before/after screenshots were taken before the PS1 brightness change (`ps1_light`).
 
 ## Building from source
 
