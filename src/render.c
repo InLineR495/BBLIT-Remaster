@@ -1409,6 +1409,7 @@ static const char *const gpu_fs =
     "flat in float v_fade;\n"
     "uniform sampler2D u_smp, u_sky;\n"
     "uniform int u_tex, u_flat, u_afunc, u_abr, u_fadd, u_stp;\n"
+    "uniform float u_light;\n"
     "uniform float u_aref, u_gain, u_fogD, u_fogS;\n"
     "in float v_h;\n"
     "uniform int u_bgpass;\n"
@@ -1470,6 +1471,10 @@ static const char *const gpu_fs =
     "    if (u_abr < 0) {\n"
     "        vec4 t = u_tex != 0 ? texture(u_smp, v_uv) : vec4(1.0);\n"
     "        vec4 f = t * col;\n"                   // GL_MODULATE (движок glTexEnv не вызывает)
+    // PS1: тексель × цвет вершины / 128 (0x80 — нейтраль) с насыщением; порт делит на 255 — мир вдвое темнее PS1
+    // (цвета вершин непрозрачного в LS01: 0x40–0x80). Мир и задник, кроме спрайтов (им порт ставит нейтраль 1,0).
+    // Множитель ps1_light/10: 20 — как PS1, по умолчанию 18 — чуть ниже, без пересвета (пользователь, 2026-10-17)
+    "        if (u_light > 0.0 && v_w > 0.0 && v_spr < 0.5) f.rgb = min(t.rgb * col.rgb * u_light, vec3(1.0));\n"
     "        if (!atest(f.a)) discard;\n"
     "        float fg = fogf();\n"                   // смешиваемое со сложением гаснет, остальное уходит в задник
     "        float hf = hazef();\n"
@@ -1647,7 +1652,7 @@ static int prim_list(const struct bb_snapshot *b, const struct bb_prim *p)
 static unsigned gprog, gvao, gvbo, gibo, gpu_gen, gpu_trans_mode;
 static int gpu_state;               // 0 — не создан, 1 — готов, −1 — отказ (до нового контекста)
 static int u_bgpass, u_ci, u_vp, u_scr, u_hz, u_hzTop, u_hzThick, u_hzNear, u_hzFar, u_hzMax, u_hzA0, u_hzA1, u_hzCol;
-static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp;
+static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp, u_light;
 
 static unsigned gpu_shader(unsigned type, const char *src)
 {
@@ -1709,7 +1714,7 @@ static int gpu_init(void)
         return 0;
     }
 #define U(v) (v = gx.GetUniformLocation(gprog, #v))
-    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp);
+    U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp); U(u_light);
     U(u_fogD); U(u_fogS); U(u_fadd); U(u_fadek);
     U(u_bgpass); U(u_ci); U(u_vp); U(u_scr); U(u_hz); U(u_hzTop); U(u_hzThick); U(u_hzNear); U(u_hzFar);
     U(u_hzMax); U(u_hzA0); U(u_hzA1); U(u_hzCol);
@@ -3313,6 +3318,7 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
         gx.Uniform1i(u_fogs, fog_d > 0 ? 10 : bb_cfg.fog_sharp);
         gx.Uniform1f(u_gain, bb_cfg.ps1_gain / 10.0f);
         gx.Uniform1i(u_stp, bb_cfg.ps1_stp);
+        gx.Uniform1f(u_light, bb_cfg.ps1_light / 10.0f);
         gx.Uniform1f(u_fadek, 1.0f / FADE_TICKS);
         gx.Uniform1f(u_fogD, 0.0f);
         gx.Uniform1f(u_fogS, (float)(bb_cfg.fog_start / 100.0));

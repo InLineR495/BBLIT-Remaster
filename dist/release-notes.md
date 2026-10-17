@@ -4,6 +4,7 @@ First public release: Bugs Bunny: Lost in Time on a modern renderer.
 - Any refresh rate (60/120/144 Hz) at the correct game speed: logic stays at its native 30 ticks, the frames in between are interpolated.
 - Hor+ widescreen without stretching; HUD anchored to the screen edges.
 - 2× draw distance (4× for characters) with smooth fade-in. Fog to the sky colour so the bigger world doesn't end in a hard edge; ground haze in "Wabbit on the run!" and "Magic Hare Blower".
+- PS1-like brightness (the PC port rendered the world about half as bright).
 - 4× MSAA, correct PS1 transparency, no cracks in cliffs and no holes when swinging the camera.
 - Native XInput: analogue walk/run, camera on the right stick, jump buffer, Start = pause.
 - Fixed: Bugs no longer sinks into pushable stones; the time machine no longer sticks through the title logo; hub holes no longer flicker; horizon silhouettes are dark as on the PS1.

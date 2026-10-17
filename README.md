@@ -27,6 +27,8 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
 
 "Wabbit on the run!" and "Magic Hare Blower" also get ground haze. It hides where the distant cliffs end; without it, for example, the dinosaur's neck hangs in mid-air. Other levels have no haze, because there it only darkened the horizon.
 
+**Brightness as on the PS1.** The PC port divides vertex colours by 255, while the PS1 treats 0x80 as neutral, so the PC world was about half as bright as the PS1 one. The mod restores PS1-like brightness, slightly toned down (×1.8 instead of ×2) to avoid overexposure. This is adjustable with `ps1_light`.
+
 **Clean image.**
 - 4× MSAA.
 - PS1 transparency (water, glass, effects) uses the proper blending modes instead of the PC port's alpha fakes, so it no longer flickers.
@@ -131,6 +133,7 @@ All settings live in `BIN\remaster.ini` and are commented there. The `[live]` se
 | `draw_dist` | `[live]` | 200 | World draw distance, % of the original (100 = stock) |
 | `actor_dist` | `[live]` | 400 | Character and item draw distance, % |
 | `haze` | `[live]`, `[levelN]` | 0 / 100 | Ground haze strength, %; per-level overrides go in `[levelN]` sections |
+| `ps1_light` | `[live]` | 18 | World brightness ×10: 20 = exactly as on the PS1, 10 = like the PC port, 0 = PC port path |
 | `xinput` | `[remaster]` | 1 | 0 = original gamepad handling |
 | `big_cores` | `[remaster]` | 1 | Pin the main thread to the fast cores on hybrid CPUs |
 
