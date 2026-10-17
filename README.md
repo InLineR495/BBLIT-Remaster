@@ -15,6 +15,10 @@ The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game fil
 ![Original](docs/l01a-original.jpg)
 ![BBLIT Remaster](docs/l01a-remaster.jpg)
 
+The time vortex between eras, BBLIT Remaster:
+
+![Time vortex](docs/time-vortex.jpg)
+
 ## What you get
 
 **Smooth at any refresh rate.** The original is hard-locked to 30 fps: position, camera and animation advance once per frame, so raising the cap just speeds the game up. The mod keeps the game logic at its native 30 ticks per second and draws in-between frames. Character, camera and animation movement is interpolated, so 60, 90, 120 and 144 Hz all play at the correct speed. By default the frame rate follows your display's refresh rate.
