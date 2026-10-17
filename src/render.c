@@ -1164,16 +1164,19 @@ static void spin_snap(const struct bb_snapshot *a, const struct bb_snapshot *b, 
     }
 }
 
-// Скачок фазы вращения эффекта — спрятать. Вихрь над норой (два слоя: ~24° и ~47° за шаг анимации, шаг через тик)
-// иногда проскакивает сразу несколько шагов (×6 — 142° и −78° за тик, запись 2026-10-17). В оригинале (15 Гц, рывками)
-// это незаметно, у нас на ровном вращении — «шаг одним кадром» и пауза ~67 мс («дёргается, но меньше»). Фаза
-// закрученного вихря не видна: проскок поворачивается обратно вокруг центра и оси объекта, сдвиг фазы копится (off)
-// и применяется к следующим тикам — вращение идёт обычным шагом. Только полупрозрачные плоские (воронка — тоже) жёсткие,
-// уже провернувшиеся в одну сторону на полуоборот (маятник — нет: разворот сбрасывает историю).
-// Вершины B правятся на месте (в мире).
+// Вращение эффекта — своё, ровное. Вихрь над норой (два слоя: ~24° и ~48° за шаг анимации, шаг через тик) у движка
+// идёт рывками и иногда проскакивает несколько шагов (×6 — 144° и 288° ≡ −72° за тик, запись 2026-10-17); фазу
+// закрученного вихря глазом не видно, видна только скорость. Поэтому положение, размер и ось берутся у движка, а угол —
+// свой: каждый тик ровно ω. ω — средний обычный шаг движка за ~1 с (медиана, шаги 0,4–1,8 медианы) × доля тиков с
+// движением (через тик — ½). Нет устойчивой скорости (только появился, медленный, маятник: меньше полуоборота за окно,
+// < 70 % шагов в одну сторону) — движение движка с прежним сдвигом фазы, без скачка. Только полупрозрачные плоские
+// (воронка — тоже) жёсткие объекты. Вершины B поворачиваются на месте в снимке (в мире, вокруг центра) — следующая пара
+// берёт их как A. Первая версия прятала проскоки сдвигом от «обычного шага» — шаг прилипал к выбросу (97° вместо 24°,
+// −118° вместо +48°), и вихрь со временем «колбасило» (пользователь).
 #define SH_BITS 10
+#define SH_HIST 32
 #define SH_PI 3.14159265358979323846
-static struct sh_obj { uint32_t obj, last; double n[3], step, turn, off; } sh_tab[1 << SH_BITS];
+static struct sh_obj { uint32_t obj, last; double n[3], corr; float inc[SH_HIST]; uint8_t k, pos; } sh_tab[1 << SH_BITS];
 static uint32_t sh_used, sh_build;
 static const struct bb_snapshot *sh_snap;
 
@@ -1216,6 +1219,38 @@ static double wrap_pi(double x)
     return x;
 }
 
+static int sh_speed(const struct sh_obj *o, double *w)     // устойчивая скорость, рад/тик
+{
+    float v[SH_HIST];
+    int n = 0, m = 0;
+    double sum = 0;
+    if (o->k < SH_HIST / 2)
+        return 0;
+    for (int i = 0; i < o->k; i++)
+        if (fabsf(o->inc[i]) > 0.5f * (float)SH_PI / 180)
+            v[n++] = o->inc[i];
+    if (n < 4)
+        return 0;
+    for (int i = 1; i < n; i++)                     // медиана
+        for (int j = i; j > 0 && v[j - 1] > v[j]; j--) {
+            float t = v[j];
+            v[j] = v[j - 1];
+            v[j - 1] = t;
+        }
+    double med = v[n / 2];
+    for (int i = 0; i < n; i++) {
+        double r = v[i] / med;
+        if (r >= 0.4 && r <= 1.8) {
+            m++;
+            sum += v[i];
+        }
+    }
+    if (m < 0.7 * n || fabs(sum) < SH_PI)
+        return 0;
+    *w = sum / m * n / o->k;
+    return 1;
+}
+
 static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, double ih)
 {
     static double cov[1 << SP_BITS][6], acc[1 << SP_BITS][4];  // ковариация B; Σ a·b, Σ (a×b)·n, Σ|a|², Σ|b|²
@@ -1234,8 +1269,8 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
     memset(cov, 0, sizeof cov);
     memset(acc, 0, sizeof acc);
     memset(rot, 0, sizeof rot);
-    // 0 — центры A и B (мир); 1 — ковариация B → нормаль; 2 — угол A→B в плоскости (B со сдвигом фазы) → решение;
-    // 3 — вершины B повернуть на −сдвиг вокруг центра
+    // 0 — центры A и B (мир); 1 — ковариация B → ось; 2 — угол A (показанный) → B (движка) в плоскости → решение;
+    // 3 — вершины B повернуть вокруг центра
     for (int pass = 0; pass < 4; pass++) {
         for (uint32_t i = 0; i < b->nverts; i++) {
             const struct bb_vert *v = &b->verts[i];
@@ -1267,12 +1302,11 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
                 cov[h][0] += rb[0] * rb[0]; cov[h][1] += rb[0] * rb[1]; cov[h][2] += rb[0] * rb[2];
                 cov[h][3] += rb[1] * rb[1]; cov[h][4] += rb[1] * rb[2]; cov[h][5] += rb[2] * rb[2];
             } else if (pass == 2) {
-                double q[3], a2[3], b2[3];
-                rot_axis(n, -sh_find(v->obj, b->build_id)->off, rb, q);
-                double da = ra[0] * n[0] + ra[1] * n[1] + ra[2] * n[2], db = q[0] * n[0] + q[1] * n[1] + q[2] * n[2];
+                double a2[3], b2[3];
+                double da = ra[0] * n[0] + ra[1] * n[1] + ra[2] * n[2], db = rb[0] * n[0] + rb[1] * n[1] + rb[2] * n[2];
                 for (int r = 0; r < 3; r++) {
                     a2[r] = ra[r] - da * n[r];
-                    b2[r] = q[r] - db * n[r];
+                    b2[r] = rb[r] - db * n[r];
                 }
                 acc[h][0] += a2[0] * b2[0] + a2[1] * b2[1] + a2[2] * b2[2];
                 acc[h][1] += n[0] * (a2[1] * b2[2] - a2[2] * b2[1]) + n[1] * (a2[2] * b2[0] - a2[0] * b2[2]) +
@@ -1298,7 +1332,7 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
             for (uint32_t h = 0; h < (1u << SP_BITS); h++)
                 for (int r = 0; sp_n[h] && r < 6; r++)
                     sp_c[h][r] /= sp_n[h];
-        } else if (pass == 1) {                     // нормаль — наименьшая ось ковариации; знак — как в прошлом тике
+        } else if (pass == 1) {
             for (uint32_t h = 0; h < (1u << SP_BITS); h++) {
                 if (!sp_obj[h] || sp_n[h] < 4)
                     continue;
@@ -1327,29 +1361,27 @@ static void spin_hide(const struct bb_snapshot *a, const struct bb_snapshot *b, 
                 if (!sp_obj[h] || sp_n[h] < 4)
                     continue;
                 struct sh_obj *o = sh_find(sp_obj[h], b->build_id);
-                if (o->last + 2 < b->build_id)      // не было — история заново
-                    o->step = o->turn = o->off = 0;
+                if (o->last + 2 < b->build_id) {    // не было — заново, без сдвига
+                    o->corr = 0;
+                    o->k = o->pos = 0;
+                }
                 o->last = b->build_id;
                 memcpy(o->n, nrm[h], sizeof o->n);
                 double sa = acc[h][2], res = sa + acc[h][3] - 2 * sqrt(acc[h][0] * acc[h][0] + acc[h][1] * acc[h][1]);
-                if (sa < 16.0 * sp_n[h] || res > 0.02 * sa) {   // точка или не жёсткий — без истории
-                    o->step = o->turn = 0;
+                double c = o->corr, w;              // по умолчанию — движение движка с прежним сдвигом фазы
+                if (sa < 16.0 * sp_n[h] || res > 0.02 * sa) {   // точка или не жёсткий — история заново
+                    o->k = o->pos = 0;
                 } else {
-                    double th = atan2(acc[h][1], acc[h][0]), r = o->step != 0 ? th / o->step : 0;
-                    if (fabs(th) <= 0.5 * SH_PI / 180) {
-                        // покой (анимация через тик)
-                    } else if (o->step == 0 || (r <= -0.6 && r >= -1.4)) {
-                        o->step = th;               // новая история; разворот (маятник) — тоже
-                        o->turn = th;
-                    } else if (r >= 0.4 && r <= 1.8) {
-                        o->step += 0.3 * (th - o->step);   // обычный шаг (скорость плавает: 19–30° у внешнего слоя)
-                        o->turn += th;
-                    } else if (fabs(o->turn) >= SH_PI) {
-                        o->off = wrap_pi(o->off + wrap_pi(th - o->step));   // проскок — шаг как обычно
-                        o->turn += o->step;
-                    }                               // проскок до полуоборота в одну сторону — как есть
+                    double th = atan2(acc[h][1], acc[h][0]);    // показанный A → B движка
+                    o->inc[o->pos] = (float)wrap_pi(th + o->corr);  // шаг движка A → B
+                    o->pos = (uint8_t)((o->pos + 1) % SH_HIST);
+                    if (o->k < SH_HIST)
+                        o->k++;
+                    if (sh_speed(o, &w))
+                        c = wrap_pi(w - th);        // свой шаг: показанный A → показанный B = ω
                 }
-                rot[h] = -o->off;
+                o->corr = c;
+                rot[h] = c;
             }
         }
     }
