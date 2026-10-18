@@ -411,6 +411,14 @@ static void ft_init(void)
 static volatile int32_t pt_xmax, pt_xmin;
 static int pt_ok;
 
+// --- M5b GQ: запас тестов групп ---
+// Группа полигонов комнаты (оп. 4, 0x410801: ограничивающий четырёхугольник) и группа частей актора (0x4110ee)
+// выкидываются целиком, если все их точки за краем кадра движка по X ([0x621614]/[0x621610]) или Y ([0x62161c]/
+// [0x621618]). Тест порталов уже шёл по границам с запасом, а эти — по стоковым: настил у края широкого кадра
+// пропадал, и под ним было видно море (L03A, trace 2026-10-18). Пока рисует наш рендер — те же границы, что у порталов.
+static volatile int32_t gq_ymin;
+static int gq_ok;
+
 // --- M5b YG: вертикальный запас отсечения движка ---
 // Пополигонные тесты и группы режут «всё выше края кадра» по h = word[0x4efb4e]; рендер показывает промежуточные
 // кадры между тиками — край в них другой, и на снижении камеры (прыжок) сверху видны вырезанные полосы неба.
@@ -442,6 +450,18 @@ static void yg_init(void)
         pt_ok = bb_patch(bb_site_va(BB_SITE_PT_XMAX) + 2, &ax, 4) && bb_patch(bb_site_va(BB_SITE_PT_XMIN) + 2, &an, 4);
         bb_log("M5b: границы теста порталов по X -> %p/%p (%s)", (void *)&pt_xmax, (void *)&pt_xmin, pt_ok ? "ок" : "ОШИБКА");
     }
+    static const int gq_sites[8] = { BB_SITE_GQ_XMAX, BB_SITE_GQ_XMIN, BB_SITE_GQ_YMAX, BB_SITE_GQ_YMIN,
+                                     BB_SITE_GP_XMAX, BB_SITE_GP_XMIN, BB_SITE_GP_YMAX, BB_SITE_GP_YMIN };
+    volatile int32_t *gq_to[4] = { &pt_xmax, &pt_xmin, &yg_portal, &gq_ymin };
+    gq_ok = pt_ok && yg_ok;
+    for (int i = 0; i < 8 && gq_ok; i++)
+        gq_ok = bb_site_check(gq_sites[i]);
+    gq_ymin = -yg_portal;
+    for (int i = 0; i < 8 && gq_ok; i++) {
+        uint32_t a = (uint32_t)(uintptr_t)gq_to[i & 3];
+        gq_ok = bb_patch(bb_site_va(gq_sites[i]) + 2, &a, 4);
+    }
+    bb_log("M5b GQ: границы тестов групп комнат и частей -> запас порталов (%s)", gq_ok ? "ок" : "не ставится");
 }
 
 // C1: запас по вертикали и глубина комнат на это построение (+ страховка ёмкостей движка)
@@ -454,6 +474,7 @@ static void ft_yg_build_begin(void)
     yg_portal = (int32_t)(h >> 1) * pg / 100;
     pt_xmax = (int32_t)(w >> 1) * pg / 100;
     pt_xmin = -pt_xmax;
+    gq_ymin = -yg_portal;
     if (yg_ok) {
         uint32_t g = active && bb_cfg.interp ? (uint32_t)h * (100u + (uint32_t)bb_cfg.v_guard) / 100u : h;
         yg_h = (uint16_t)(g > 0xffff ? 0xffff : g);
