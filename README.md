@@ -55,9 +55,11 @@ This is not frame interpolation: nothing is guessed from finished images the way
 - A palm leaf right in front of the camera no longer cuts holes in Bugs, the time machine and the hub holes behind it.
 - No thin seams along the edges of leaves or square outlines inside the hub holes (the original PC port has them too).
 - The level-entrance vortices in the hub spin smoothly instead of twitching and "restarting" when you walk up to them.
-- No disc needed: the European release's CD check is switched off in memory (the Russian release never had it). The game files are not modified.
+- No disc needed: the CD check of the European and North American releases is switched off in memory (the Russian release never had it). The game files are not modified.
 - Save slots in the main menu stay inside their panel instead of one row jumping to the screen edge.
 - Startup logos fill the whole screen with their background instead of sitting between black bars.
+- "Hey What's Up, Dock?": diving into the burrow by the floating barrels no longer throws Bugs back. The longer character draw distance had switched on the second burrow, which grabbed Bugs towards the wrong end; now it ignores the dive, as in the original.
+- "Hey What's Up, Dock?": the floating platform is no longer drawn as a flat decal on the ground, the sky islands and the sun no longer clash with the ship's hull in depth (no palm tree "stuck" on the ship), Bugs' shadow falls on the floating barrel, and the helm and the drawbridge no longer pop in and out at the original radius.
 
 **Handheld PCs (Linux/Proton).** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On Windows its own scheduler handles this. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
 
@@ -160,6 +162,10 @@ The main settings live in `BIN\remaster.ini` and are commented there. The `[live
 | `ps1_light` | `[live]` | 18 | World brightness ×10: 20 = exactly as on the PS1, 10 = like the PC port, 0 = PC port path |
 | `xinput` | `[remaster]` | 1 | 0 = original gamepad handling |
 | `big_cores` | `[remaster]` | 1 | Pin the main thread to the fast cores on hybrid CPUs (Linux/Proton) |
+| `dive_gate` | `[remaster]`, `[live]` | 1 | Burrows (docks level): 1 = a burrow kept awake by `actor_dist` ignores a dive, as in the original; 0 = off; 2 = log only |
+| `sky_dome` | `[remaster]`, `[live]` | 1 | The sky dome that follows the camera (docks level: islands, sun) is drawn as a backdrop; 0 = like the engine does |
+| `shadow_act` | `[remaster]`, `[live]` | 25 | Shadows that fall on characters and objects (Bugs on a barrel): % of the usual pull toward the camera, 0 = off |
+| `part_extra` | `[remaster]` | 1024 | Extra parts in the pool for distant characters (own buffer); 0 = the engine's own pool |
 | `hud_aspect` | `[live]` | 178 | Widest frame for the HUD counters, aspect ratio ×100: 178 = a 16:9 frame (the screen edges on 16:9 and 16:10 screens, closer to the centre on ultrawide ones), 0 = always the screen edges, 133 = the original 4:3 positions |
 | `splash_fill` | `[remaster]` | 1 | Startup logos: extend their plain background into the side bars; 0 = black bars as in the original |
 

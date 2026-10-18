@@ -231,9 +231,9 @@ static void on_begin_build(int k, uint32_t *esp)
     memset(bb_pool_obj, 0, sizeof bb_pool_obj);
     bb_ord_n = 0;
     if (++dome_build % 256 == 0)                        // купол другого уровня — в другом слоте; старые записи забыть
-        for (int k = dome_n - 1; k >= 0; k--)
-            if (dome_build - dome[k].build > 64)
-                dome[k] = dome[--dome_n];
+        for (int j = dome_n - 1; j >= 0; j--)
+            if (dome_build - dome[j].build > 64)
+                dome[j] = dome[--dome_n];
     bb_fog_build_begin();
     bb_cam_on_build();
     bb_hor_build_begin(esp[0]);

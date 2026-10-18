@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 #include "hook.h"
 #include "log.h"
@@ -47,7 +48,8 @@ static int ar_q8 = 256, ar_free, ar_new, ar_drops, ar_burst;
 static uint32_t ar_tick = 2;
 // кто был включён в прошлом тике (бит +4 & 2 не годится: 0x447d40 ставит его всем перед проверкой дистанции)
 #define AR_BITS 11
-static struct ar_ent { uint32_t actor, tick, lost; } ar_tab[1 << AR_BITS];   // lost — тиков подряд «комната не рисуется»
+// lost — тиков подряд «комната не рисуется»; far_tick/far_dist — тик и расстояние, когда актора держит наш предел дальше его R
+static struct ar_ent { uint32_t actor, tick, lost, far_tick; int32_t far_dist; } ar_tab[1 << AR_BITS];
 static int ar_used;
 
 #define AR_ROOM_LOST 15
@@ -64,11 +66,23 @@ static struct ar_ent *ar_slot(uint32_t actor)
             h = (actor * 2654435761u) >> (32 - AR_BITS);
         }
         ar_tab[h].actor = actor;
-        ar_tab[h].tick = ar_tab[h].lost = 0;
+        ar_tab[h].tick = ar_tab[h].lost = ar_tab[h].far_tick = 0;
         ar_used++;
     }
     return &ar_tab[h];
 }
+
+static struct ar_ent *ar_find(uint32_t actor)             // без вставки; таблица занята не больше чем на 3/4 — пустое место есть
+{
+    uint32_t h = (actor * 2654435761u) >> (32 - AR_BITS);
+    while (ar_tab[h].actor) {
+        if (ar_tab[h].actor == actor)
+            return &ar_tab[h];
+        h = (h + 1) & ((1u << AR_BITS) - 1);
+    }
+    return NULL;
+}
+
 static uint32_t ar_far_max, ar_far_now, ar_new_sec, ar_denied_sec, ar_dropped_sec;
 static int ar_free_min = 1 << 30;
 static uint32_t ar_type_sec[64];          // дальние включения за секунду по типу актора (+0x2c)
@@ -100,7 +114,7 @@ static void ar_dump_line(uint32_t actor, int32_t dist, int32_t r, int32_t lim, i
 {
     if (!ar_dump_f)
         return;
-    char line[200];
+    char line[512];                                     // запись до ~340 байт (int32 в полях и длинная причина); _snprintf — с границей
     DWORD wr;
     int16_t room = *(volatile int16_t *)(uintptr_t)(actor + 0x26);
     int n = *(volatile int16_t *)(uintptr_t)0x4b39dcu, at = -1;
@@ -109,10 +123,25 @@ static void ar_dump_line(uint32_t actor, int32_t dist, int32_t r, int32_t lim, i
             at = i;
             break;
         }
-    int len = wsprintfA(line, "%08lx тип %d dist %ld R %ld предел %ld комната %d позиция %d/%d флаг %d был %d lost %d — %s\r\n",
+    int len = _snprintf(line, sizeof line, "%08lx тип %d dist %ld R %ld предел %ld комната %d позиция %d/%d флаг %d был %d lost %d — %s"
+                        " | xyz %ld %ld %ld +4 %08lx +8 %08lx +c %08lx +3c %02x\r\n",
                         (unsigned long)actor, *(volatile int16_t *)(uintptr_t)(actor + 0x2c), (long)dist, (long)r, (long)lim,
-                        room, at, n, at >= 0 ? *(volatile uint8_t *)(uintptr_t)(0x4b3462u + 0x14 * at) : -1, was, lost, why);
+                        room, at, n, at >= 0 ? *(volatile uint8_t *)(uintptr_t)(0x4b3462u + 0x14 * at) : -1, was, lost, why,
+                        (long)(int32_t)RD32(actor + 0xe4), (long)(int32_t)RD32(actor + 0xe8), (long)(int32_t)RD32(actor + 0xec),
+                        (unsigned long)RD32(actor + 4), (unsigned long)RD32(actor + 8), (unsigned long)RD32(actor + 0xc),
+                        *(volatile uint8_t *)(uintptr_t)(actor + 0x3c));
+    if (len < 0 || len > (int)sizeof line)
+        len = (int)sizeof line;
     WriteFile(ar_dump_f, line, (DWORD)len, &wr, NULL);
+}
+
+// Актор держится включённым дальше своего R (return lim): метка тика для обёртки условия нырка (dive_cond ниже)
+static int32_t ar_far_hold(struct ar_ent *e, int32_t dist, int32_t lim)
+{
+    e->far_tick = ar_tick;
+    e->far_dist = dist;
+    ar_far_now++;
+    return lim;
 }
 
 int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
@@ -146,8 +175,12 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
     }
     if (ar_q8 <= 256)
         return r;
+    if ((bb_cfg.ar_stock_type >= 0 && *(volatile int16_t *)(uintptr_t)(actor + 0x2c) == bb_cfg.ar_stock_type) ||
+        (bb_cfg.ar_stock_actor && actor >= bb_cfg.ar_stock_actor && actor <= bb_cfg.ar_stock_actor2))
+        return r;                                      // отладка: этот тип или актор — по стоковой дальности
     struct ar_ent *e = ar_slot(actor);
     uint32_t *t = &e->tick, was = *t + 1 >= ar_tick;          // включён в прошлом (или этом) тике
+    e->far_tick = 0;                                           // метка «держится дальше R» ставится только на return lim (ar_far_hold)
     if (dist <= r) {
         *t = ar_tick;
         return r;
@@ -172,13 +205,13 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
         // поможет, а только погасит объект. Раньше за тик сбрасывались все дальние разом (L03A: 67 за тик), и мир
         // мигал: гасли и по 3 за тик проявлялись снова (2026-10-18). Теперь — только отдающие части, по одному за тик.
         if (ar_free < AR_HARD) {
-            // части отдаёт движок (0x447f87): +8 & 0x1000, части есть (+0x78), +0x70 == 0, ещё не отданы (+0x15c & 0x4000)
-            int gives = (RD32(actor + 8) & 0x1000) && RD32(actor + 0x78) && !RD32(actor + 0x70) &&
-                        !(RD32(actor + 0x15c) & 0x4000);
+            // части отдаёт движок (0x447f87): +0x3c & 0x40 сброшен (иначе 0x447f46 → 0x447f4c, минуя 0x447f87; в B 0x4480b6),
+            // +8 & 0x1000, части есть (+0x78), +0x70 == 0, ещё не отданы (+0x15c & 0x4000)
+            int gives = !(*(volatile uint8_t *)(uintptr_t)(actor + 0x3c) & 0x40) && (RD32(actor + 8) & 0x1000) &&
+                        RD32(actor + 0x78) && !RD32(actor + 0x70) && !(RD32(actor + 0x15c) & 0x4000);
             if (!gives || ar_drops >= 1) {
-                ar_far_now++;
                 ar_dump_line(actor, dist, r, lim, 1, (int)e->lost, "держится (частей мало, сброс не поможет)");
-                return lim;
+                return ar_far_hold(e, dist, lim);
             }
             *t = 0;
             ar_drops++;
@@ -188,9 +221,8 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
             ar_dump_line(actor, dist, r, lim, 1, (int)e->lost, "сброшен: мало частей");
             return r;
         }
-        ar_far_now++;
         ar_dump_line(actor, dist, r, lim, 1, (int)e->lost, "держится");
-        return lim;
+        return ar_far_hold(e, dist, lim);
     }
     // Выключенный актор свои части не отдаёт (+0x78 — список частей), кроме флага +8 & 0x1000: тот освобождает их при
     // отсеве и собирает заново при возврате. Включение актора с частями пул не тратит — довольно запаса, при котором
@@ -213,9 +245,58 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
             ar_type_sec[ty]++;
     }
     ar_free -= est;
-    ar_far_now++;
     ar_dump_line(actor, dist, r, lim, 0, 0, est ? "включён (части соберёт)" : "включён (части есть)");
-    return lim;
+    return ar_far_hold(e, dist, lim);
+}
+
+// --- M5-AR: условие «нырок» у акторов, которых держит наш предел (нора L03A, 2026-10-18) ---
+// Норы доков L03A (L03A.BZE #99 класс 209 — выход, #100 класс 210 — вход; тип 14, R = 5000, друг от друга 5460) — скриптовые
+// объекты с записью «игрок в нырке (условие 0x34 = (player+0x18 >> 2) & 1, 0x42b3f0) → породить носильщика» без проверки
+// расстояния. Парную нору от этой записи берегла дальность: вне R от камеры движок её выключал (+4 &= ~2, 0x447f3a), и на
+// нырок срабатывала одна нора. При ×4 парная нора включена (≤ 4R и в конусе камеры), на тот же нырок рождает второго
+// носильщика (класс 361 — ко входу), и он уносит Багза не туда: выброс у входа, «двойной прыжок», проходит ~1 из 5
+// (устройство: выход включён — выброс 5 из 5, по стоковой дальности — 4 из 4). Обёртка в слоте таблицы условий [0x4ac620]
+// делает условие ложным у актора, включённого дальше его стокового R: как в стоке, где логика такого актора не видела вовсе.
+// Нора остаётся видимой и анимированной. Признак — класс случая, а не адрес или уровень; по данным уровней та же схема
+// в L03A2 (норы 196/197, 23 тыс. друг от друга) и L03D1 (нора 133 и нора-выход уровня 153) — в игре не проверялось.
+// Ключ dive_gate: 0 — выкл., 1 — ложно (по умолчанию), 2 — только лог.
+static int (__cdecl *dive_cond_orig)(uint32_t self, const void *rec);
+static uint32_t dive_gated_sec, dive_logged;
+
+static int __cdecl dive_cond(uint32_t self, const void *rec)       // TestLogicCond 0x42a7d0: call [слот](актор, запись), cdecl
+{
+    int v = dive_cond_orig(self, rec);
+    if (!v || bb_cfg.dive_gate <= 0 || ar_q8 <= 256)
+        return v;
+    struct ar_ent *e = ar_find(self);
+    if (!e || e->far_tick != ar_tick)                           // ActorManager отсеивает и вызывает обработчики в одном тике
+        return v;
+    dive_gated_sec++;
+    if (dive_logged < 40) {
+        dive_logged++;
+        bb_log("M5-AR dive_gate: актор %08lx класс %d R %d dist %ld дальше стока — нырок %s", (unsigned long)self,
+               (int)(int16_t)RD16(self + 0x1c), (int)RD16(self + 0x3e), (long)e->far_dist,
+               bb_cfg.dive_gate == 1 ? "подавлен" : "(только лог)");
+    }
+    return bb_cfg.dive_gate == 1 ? 0 : v;
+}
+
+static void dive_init(void)
+{
+    if (!bb_site_check(BB_SITE_COND_DIVE))
+        return;
+    uint32_t fn = bb_site_va(BB_SITE_COND_DIVE), mine = (uint32_t)(uintptr_t)dive_cond;
+    if (RD32(BB_SLOT_COND_DIVE) != fn) {                          // образ перенесён (.reloc) или слот другой — не трогаем
+        bb_log("M5-AR dive_gate: в слоте 0x4ac620 %08lx, а не %08lx — условие нырка как в оригинале",
+               (unsigned long)RD32(BB_SLOT_COND_DIVE), (unsigned long)fn);
+        return;
+    }
+    dive_cond_orig = (int (__cdecl *)(uint32_t, const void *))(uintptr_t)fn;
+    if (bb_patch(BB_SLOT_COND_DIVE, &mine, 4))
+        bb_log("M5-AR dive_gate: слот условия нырка 0x4ac620 -> %p (было %08lx), режим %d", (void *)dive_cond, (unsigned long)fn,
+               bb_cfg.dive_gate);
+    else
+        dive_cond_orig = NULL;
 }
 
 // C1 (раз в тик, до следующего ActorManager): защёлкнуть множитель, пересчитать свободные части
@@ -317,6 +398,7 @@ static void ar_init(void)
         return;
     }
     bb_log("M5-AR: сравнение 0x447f3a -> %p (дистанция акторов ×%d%%)", (void *)ar_stub, bb_cfg.actor_dist);
+    dive_init();                                                // метки far_tick нужны обёртке — только при поставленном сравнении
 }
 
 
@@ -428,6 +510,10 @@ void bb_fog_log_second(void)
             bb_log("P22 дальние включения по типам (тип:число):%s", tl);
         memset(ar_type_sec, 0, sizeof ar_type_sec);
     }
+    if (dive_gated_sec)
+        bb_log("P33 нора: условие нырка у включённых дальше R %s: %lu вычислений за с", bb_cfg.dive_gate == 1 ? "подавлено" : "(только лог)",
+               (unsigned long)dive_gated_sec);
+    dive_gated_sec = 0;
     ar_new_sec = ar_denied_sec = ar_dropped_sec = ar_far_max = 0;
     ar_free_min = 1 << 30;
 }

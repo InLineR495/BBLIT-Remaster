@@ -54,7 +54,8 @@
     X(N1_PADUPD,   0x40660b, "e8 b0 2b 04 00") \
     X(N2_MAPPAD,   0x449223, "e8 e8 9d fb ff") \
     X(K2_CAM,      0x4323ce, "8b 1d 40 39 4b 00") \
-    X(PARTPOOL,    0x430964, "0f bf 05 44 22 4b 00")
+    X(PARTPOOL,    0x430964, "0f bf 05 44 22 4b 00") \
+    X(COND_DIVE,   0x42b3f0, "a1 4c 32 4b 00 8b 40 18 25 ff 00 00 00 c1 e8 02 83 e0 01 c3")
 
 // I(имя, VA слота IAT в раскладке A, в раскладке B, "DLL", "функция"). В B импорт длиннее (OemKeyScan) — слоты сдвинуты.
 #define BB_IATS(I) \
@@ -78,7 +79,8 @@
     C(0x410b62, 0x410bf2) C(0x410bbe, 0x410c4e) C(0x410c15, 0x410ca5) C(0x410f6f, 0x410fff) \
     C(0x410f74, 0x411004) C(0x410f90, 0x411020) C(0x410fb4, 0x411044) C(0x410fc0, 0x411050) \
     C(0x411350, 0x4113e0) C(0x411c7d, 0x411d0d) C(0x4124b0, 0x412540) C(0x414590, 0x414620) \
-    C(0x414b40, 0x414bd0) C(0x414c0a, 0x414c9a) C(0x42e050, 0x42e0f0) C(0x42e7a0, 0x42e910) C(0x430964, 0x430ad4) \
+    C(0x414b40, 0x414bd0) C(0x414c0a, 0x414c9a) C(0x42b3f0, 0x42b470) \
+    C(0x42e050, 0x42e0f0) C(0x42e7a0, 0x42e910) C(0x430964, 0x430ad4) \
     C(0x4323ce, 0x43253e) C(0x432436, 0x4325a6) C(0x447a50, 0x447bc0) C(0x447f3a, 0x4480aa) \
     C(0x448074, 0x4481e4) C(0x4481c7, 0x448337) C(0x4481d1, 0x448341) C(0x4484b7, 0x448627) \
     C(0x4484bd, 0x44862d) C(0x448d40, 0x448eb0) C(0x4491c0, 0x449330) C(0x449223, 0x449393) \
@@ -105,6 +107,10 @@ uint32_t bb_code(uint32_t va);
 #define BB_FN_EMIT_TRI       BB_CODE(0x414590u)
 #define BB_SLOT_EMIT_QUAD    0x4b1a74u      // G4-E2
 #define BB_FN_EMIT_QUAD      BB_CODE(0x414b40u)
+
+// Слот таблицы условий логики [0x4ac550 + 4·код] (.data, VA одинаков в A и B): код 0x34 «игрок в действии нырка» —
+// функция BB_SITE_COND_DIVE (A 0x42b3f0, B 0x42b470). fog.c ставит в слот свою обёртку (нора L03A, 2026-10-18).
+#define BB_SLOT_COND_DIVE    0x4ac620u
 
 #define BB_ENUM_SITE(name, va, bytes) BB_SITE_##name,
 enum { BB_SITES(BB_ENUM_SITE) BB_SITE_COUNT };

@@ -88,6 +88,8 @@ void bb_config_load(void)
     bb_cfg.decals = GetPrivateProfileIntA("remaster", "decals", 1, ini);
     bb_cfg.sky_dome = GetPrivateProfileIntA("remaster", "sky_dome", 1, ini);
     bb_cfg.shadow_act = GetPrivateProfileIntA("remaster", "shadow_act", 25, ini);
+    if (bb_cfg.shadow_act < 0 || bb_cfg.shadow_act > 100)   // как в [live]: 500 подтягивал тень вторым проходом поверх акторов
+        bb_cfg.shadow_act = 25;
     bb_cfg.push_r = GetPrivateProfileIntA("remaster", "push_r", 50, ini);
     bb_cfg.log_sec = GetPrivateProfileIntA("remaster", "log_sec", 0, ini);
     bb_cfg.fps = GetPrivateProfileIntA("remaster", "fps", 0, ini);
@@ -133,6 +135,10 @@ void bb_config_load(void)
     bb_cfg.draw_dist = GetPrivateProfileIntA("remaster", "draw_dist", 200, ini);
     bb_cfg.fog_start = GetPrivateProfileIntA("remaster", "fog_start", 75, ini);
     bb_cfg.actor_dist = GetPrivateProfileIntA("remaster", "actor_dist", 400, ini);
+    bb_cfg.ar_stock_type = -1;             // отладочные ключи M5-AR ([live] ar_stock_actor / ar_stock_type) по умолчанию выключены
+    bb_cfg.dive_gate = GetPrivateProfileIntA("remaster", "dive_gate", 1, ini);
+    if (bb_cfg.dive_gate < 0 || bb_cfg.dive_gate > 2)
+        bb_cfg.dive_gate = 1;
     bb_cfg.part_extra = GetPrivateProfileIntA("remaster", "part_extra", 1024, ini);
     if (bb_cfg.part_extra < 0 || bb_cfg.part_extra > 8000)
         bb_cfg.part_extra = bb_cfg.part_extra < 0 ? 0 : 8000;   // PP_MAX (fog.c): сумма с ёмкостью не переполняется
@@ -150,6 +156,22 @@ void bb_config_load(void)
     bb_cfg.portal_guard = GetPrivateProfileIntA("remaster", "portal_guard", 100, ini);
     if (GetEnvironmentVariableA("REMASTER_OFF", env, sizeof env) && env[0] == '1')
         bb_cfg.off = 1;
+}
+
+// hex без strtoul: отладочные ключи не тянут в DLL лишний импорт (api-ms-win-crt-convert)
+static uint32_t parse_hex(const char *s, const char **end)
+{
+    uint32_t v = 0;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        s += 2;
+    for (;; s++) {
+        int d = *s >= '0' && *s <= '9' ? *s - '0' : *s >= 'a' && *s <= 'f' ? *s - 'a' + 10 : *s >= 'A' && *s <= 'F' ? *s - 'A' + 10 : -1;
+        if (d < 0)
+            break;
+        v = v << 4 | (uint32_t)d;
+    }
+    *end = s;
+    return v;
 }
 
 // Секция [live] перечитывается раз в секунду: render=0/1 переключает свой рендер без перезапуска (A/B с SSH).
@@ -241,6 +263,7 @@ void bb_config_live(void)
         { "cam_invert", &bb_cfg.cam_invert, 0, 1 }, { "cam_swap", &bb_cfg.cam_swap, 0, 1 },
         { "sneak", &bb_cfg.sneak, 0, 90 },
         { "fence", &bb_cfg.fence, 0, 1 }, { "p23", &bb_cfg.p23, 0, 1 }, { "vb_guard", &bb_cfg.vb_guard, 0, 150 }, { "hud_edges", &bb_cfg.hud_edges, 0, 1 }, { "hor_plus", &bb_cfg.hor_plus, 0, 1 }, { "hor_logic", &bb_cfg.hor_logic, 0, 1 }, { "no_quad_split", &bb_cfg.no_quad_split, 0, 1 }, { "hud_aspect", &bb_cfg.hud_aspect, 0, 400 }, { "title_logo", &bb_cfg.title_logo, 0, 100 }, { "decals", &bb_cfg.decals, 0, 1 }, { "sky_dome", &bb_cfg.sky_dome, 0, 1 }, { "shadow_act", &bb_cfg.shadow_act, 0, 100 }, { "ps1_stp", &bb_cfg.ps1_stp, 0, 1 }, { "alpha_split", &bb_cfg.alpha_split, 0, 1 }, { "uv_centroid", &bb_cfg.uv_centroid, 0, 1 }, { "uv_clamp", &bb_cfg.uv_clamp, 0, 1 }, { "half_lock", &bb_cfg.half_lock, 0, 1 }, { "spin_snap", &bb_cfg.spin_snap, 0, 1 }, { "spin_hide", &bb_cfg.spin_hide, 0, 1 }, { "ps1_light", &bb_cfg.ps1_light, 0, 30 }, { "push_r", &bb_cfg.push_r, 0, 200 }, { "log_sec", &bb_cfg.log_sec, 0, 1 },
+        { "dive_gate", &bb_cfg.dive_gate, 0, 2 },
     };
     for (unsigned k = 0; k < sizeof in_keys / sizeof in_keys[0]; k++) {   // M6: ввод на лету
         int v = GetPrivateProfileIntA("live", in_keys[k].key, -1, ini);
@@ -273,6 +296,22 @@ void bb_config_live(void)
     if (fs0 >= 0 && fs0 < 100 && fs0 != bb_cfg.fog_start) {
         bb_cfg.fog_start = fs0;
         bb_log("live: fog_start=%d", fs0);
+    }
+    char asa[40];                                                       // отладка M5-AR: акторы по стоковой дальности
+    const char *ase = asa;
+    GetPrivateProfileStringA("live", "ar_stock_actor", "", asa, sizeof asa, ini);   // адрес или «от-до» (hex)
+    uint32_t asv = parse_hex(asa, &ase), asw = asv;
+    if (asv && *ase == '-')
+        asw = parse_hex(ase + 1, &ase);
+    if (asv != bb_cfg.ar_stock_actor || asw != bb_cfg.ar_stock_actor2) {
+        bb_cfg.ar_stock_actor = asv;
+        bb_cfg.ar_stock_actor2 = asw;
+        bb_log("live: ar_stock_actor=%08lx-%08lx", (unsigned long)asv, (unsigned long)asw);
+    }
+    int ast = GetPrivateProfileIntA("live", "ar_stock_type", -1, ini);   // отладка M5-AR: тип по стоковой дальности
+    if (ast >= -1 && ast <= 200 && ast != bb_cfg.ar_stock_type) {
+        bb_cfg.ar_stock_type = ast;
+        bb_log("live: ar_stock_type=%d", ast);
     }
     int rd = GetPrivateProfileIntA("live", "room_depth", -1, ini);
     if (rd >= 0 && rd <= 20 && rd != bb_cfg.room_depth) {
