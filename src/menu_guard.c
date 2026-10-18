@@ -13,8 +13,8 @@
 #define RD32(a) (*(volatile uint32_t *)(uintptr_t)(a))
 #define WR32(a, v) (*(volatile uint32_t *)(uintptr_t)(a) = (v))
 #define SLOT_VIDEO_APPLY  0x4ac8b8u
-#define FN_VIDEO_APPLY    0x42e050u
-#define FN_WRITE_CONFIG   0x409a10u
+#define FN_VIDEO_APPLY    BB_CODE(0x42e050u)
+#define FN_WRITE_CONFIG   BB_CODE(0x409a10u)
 #define G_W 0x9ca830u
 #define G_H 0x9ca834u
 #define G_FULL 0x9ca838u

@@ -376,7 +376,7 @@ static DWORD WINAPI watchdog(LPVOID arg)
             uint32_t v = stack[i];
             if (!looks_like_ret(v))
                 continue;
-            if (v >= 0x401000 && v < 0x45b400) {        // адрес возврата в .text exe
+            if (v >= BB_TEXT_VA && v < BB_TEXT_VA + BB_TEXT_SIZE) {   // адрес возврата в .text exe
                 len += wsprintfA(line + len, "%x ", v);
             } else if (mlen < (int)sizeof mods - 70) {  // через какие DLL шёл вызов (по порядку, без повторов подряд)
                 module_of(v, m, sizeof m);

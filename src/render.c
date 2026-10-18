@@ -21,6 +21,7 @@
 #include "edges.h"
 #include "pacer.h"
 #include "hud_policy.h"
+#include "addr.h"
 #include <math.h>
 #include <stddef.h>
 
@@ -307,14 +308,19 @@ static int sx_compressed;
 
 void bb_hor_build_begin(uint32_t ret)
 {
+    // только 5 построений; 0x40dea7 (реинит) и 0x4478ce (инит) — без сжатия
+    static const uint32_t builds_a[5] = { BB_A(0x405ea9), BB_A(0x406851), BB_A(0x4069c0), BB_A(0x406be1), BB_A(0x406d4c) };
+    static uint32_t builds[5];
     RECT rc;
+    int i;
     sx_compressed = 0;
-    switch (ret) {                       // только 5 построений; 0x40dea7 (реинит) и 0x4478ce (инит) — без сжатия
-    case 0x405ea9: case 0x406851: case 0x4069c0: case 0x406be1: case 0x406d4c:
-        break;
-    default:
+    if (!builds[0])
+        for (i = 0; i < 5; i++)
+            builds[i] = bb_code(builds_a[i]);
+    for (i = 0; i < 5 && ret != builds[i]; i++)
+        ;
+    if (i == 5)
         return;
-    }
     hor_fcull = 1.0;
     if (!bb_cfg.render || !bb_cfg.hor_plus || failed || !bb_game_hwnd || !GetClientRect(bb_game_hwnd, &rc) ||
         rc.bottom <= 0) {
@@ -2410,6 +2416,14 @@ static int hud_root(int i)
     return i;
 }
 
+// Половина ширины рамки HUD в координатах окна: 1 — края экрана. hud_aspect сужает её до рамки этого соотношения
+// сторон по центру (на сверхшироком экране счётчики не уходят из поля зрения); 133 и меньше — позиции оригинала.
+static double hud_frame(void)
+{
+    double f = bb_cfg.hud_aspect > 0 ? bb_cfg.hud_aspect / 100.0 * hud_k * 0.75 : 1.0;
+    return f < 1.0 ? f : 1.0;
+}
+
 static int hud_gameplay(void)
 {
     uint32_t ram = *(volatile uint32_t *)(uintptr_t)0x52fd00u;
@@ -2426,7 +2440,7 @@ static void hud_scan(const struct bb_snapshot *b, int gameplay)
     // Save-slot labels and pause-menu rows can occupy the same screen bands
     // as HUD counters. They belong to their centred menu panel, so never
     // anchor individual menu rows to the widescreen edges.
-    if (!gameplay || !bb_cfg.hud_edges || hud_k >= 0.999)
+    if (!gameplay || !bb_cfg.hud_edges || hud_frame() - hud_k < 0.001)
         return;
     for (uint32_t i = 0; i < b->nprims && n < 2048; i++) {
         const struct bb_prim *p = &b->prims[i];
@@ -2820,15 +2834,17 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
     static int hud_was = -1;
     static int hud_gameplay_was = -1;
     int gameplay = hud_gameplay();
-    static double hud_k_was;
+    static double hud_k_was, hud_frame_was;
+    double frame = hud_frame();
     if (gpu_gen == pair_gen && gpu_trans_mode == (unsigned)bb_cfg.trans_mode && hud_was == bb_cfg.hud_edges &&
-        hud_k_was == hud_k && hud_gameplay_was == gameplay)
+        hud_k_was == hud_k && hud_gameplay_was == gameplay && hud_frame_was == frame)
         return;
     gpu_gen = pair_gen;
     gpu_trans_mode = (unsigned)bb_cfg.trans_mode;
     hud_was = bb_cfg.hud_edges;
     hud_gameplay_was = gameplay;
     hud_k_was = hud_k;
+    hud_frame_was = frame;
     hud_scan(b, gameplay);
     title_scan(b);
     dc_scan(b);
@@ -2895,7 +2911,7 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
                 g->sz[0] = g->sz[1] = 0;
             } else {                    // экран: 3D-HUD и спрайты у камеры с ключом сглаживаются той же формулой
                 if (hud_anchor[i]) {    // к краю: x 4:3 → x окна (рисуется в широком вьюпорте)
-                    float sh = (float)(hud_anchor[i] == 1 ? hud_k - 1.0 : 1.0 - hud_k);
+                    float sh = (float)(hud_anchor[i] == 1 ? hud_k - frame : frame - hud_k);
                     g->pa[0] = (float)(g->pa[0] * hud_k) + sh;
                     g->pb[0] = (float)(g->pb[0] * hud_k) + sh;
                 }

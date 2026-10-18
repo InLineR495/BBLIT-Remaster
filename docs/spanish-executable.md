@@ -1,4 +1,10 @@
-# Experimental profile for an executable from a Spanish installation
+# Executable from a Spanish installation
+
+> **Status:** supported by the default `ddraw.dll` as profile `ES10` (code
+> layout B, shared with the European multi-language 1.0). The separately built
+> profile described below was replaced by runtime edition detection; see
+> [porting editions](porting-editions.md). The rest of this report is kept as
+> the original contributor's evidence.
 
 This report concerns one executable supplied from a Spanish-language
 installation of **Bugs Bunny: Perdido en el Tiempo**. It does not establish
@@ -45,7 +51,7 @@ stubs. Changing only the accepted CRC or version marker would be unsafe.
 
 ## Experimental build and validation
 
-`tools/build_spanish.py` generates separate sources under `build/spanish/src`
+The original contribution's `tools/build_spanish.py` generated separate sources
 using an explicit code-address and IAT map, including generated-stub targets,
 render-writer expectations and return-address classification. It updates the
 two relative-call signatures independently. The generated DLL still requires

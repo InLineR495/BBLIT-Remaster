@@ -5,38 +5,54 @@ different binaries, and different languages can share code. Do not select
 addresses from a language name, `bugs.ini`, the Windows version resource,
 file size, or one short signature. Identify the actual executable.
 
-## Reproducible workflow
+## Supported editions and code layouts
+
+One `ddraw.dll` supports every edition listed in `src/addr.h` (`BB_PROFILES`).
+At start-up the DLL computes the CRC32 of `.text` and reads the marker qword;
+an exact match selects the edition and its code layout, anything else leaves
+the mod off. The sources always use code addresses of layout A (Russian 1.6);
+`BB_CODE()` translates them into the host's layout through `BB_CODES`.
+
+| Layout | Build | Editions |
+| --- | --- | --- |
+| A | 1.6, 26 Sep 1999 | North America (Infogrames), Russian (CITY) |
+| B | 1.0, 12 Oct 1999 | Europe multi-language (Infogrames), Spanish |
+
+Layout B was mapped by aligning normalised disassemblies of both builds (code
+targets and import slots replaced by symbols, data addresses kept). Functions
+are the same and shifted by inserted code; the only changed function the mod
+calls (the video-menu callback) differs in register allocation only. All data
+addresses the mod uses are identical: both builds reference the same 1983 data
+addresses, and layout B adds one new variable. Layout B imports one more
+function (`OemKeyScan`), so its import slots move. The Russian 1.6 is the North
+American 1.6 with the startup CD check removed by CITY and one resource string
+translated; the North American 1.6 and the European 1.0 keep the check, and the
+DLL removes it in memory (`BB_CD_CHECK_*` in `addr.h`).
+
+## Adding an edition
 
 1. Record SHA-256, PE entry point, section layout and `.text` CRC using
    `python -I tools/verify_exe.py <bugs.exe>`. Keep game assets and the EXE
    local; a contribution needs fingerprints and address evidence, not game files.
-2. Preserve the known-working build and all saves. Confirm the unmodified game
-   starts with `/opengl /win /b0 /x800 /y600` and working directory `BIN`.
-   Distinguish asset/path errors and Windows proxy-loader errors from rejected
-   executable fingerprints. The engine's 800x600 internal viewport is separate
-   from the remaster's monitor-sized output framebuffer.
-3. Compare every `BB_SITES` location with the candidate's disassembly. Short
-   prologues often match many functions: use callers, nearby instructions and
-   global accesses to establish identity. Do not choose the first byte match.
-4. Resolve all `BB_IATS` entries by DLL and symbol, then record actual slots.
-   A uniform delta is insufficient even for the Spanish example.
-5. Audit code addresses outside `addr.h`: startup resume, writer dispatch
-   expectations, calls, return-address switches, generated-stub branch targets
-   and video-menu callbacks. Verify global addresses and structure offsets too;
-   the Spanish example retaining many globals is not a rule for other editions.
-6. Recompute relative call operands from their verified site and target. Preserve
-   complete instruction boundaries and calling conventions. Retain per-site
-   byte checks and an exact accepted code fingerprint; never add a force flag.
-7. Build a separate profile, run the verifier on its generated header, and test
-   incrementally: startup, title, menus, pause, gameplay, transitions, save/load,
-   controls, interpolation, draw distance and renderer fallback. Look for rejected
-   writer slots, missing hooks, GL errors and crashes in the log. Validate on
-   Windows and/or Proton explicitly, and state which was tested.
-
-The Spanish helper demonstrates a conservative build-time mapping. It refuses
-unknown file hashes and newly introduced unaudited code literals. It is not a
-runtime signature scanner or a universal language detector. Profiles should
-only share mappings after their code/data equivalence has been established.
+2. Confirm the unmodified game starts with `/opengl /win /b0 /x800 /y600` and
+   working directory `BIN`. Distinguish asset/path errors and Windows
+   proxy-loader errors from rejected executable fingerprints.
+3. If its code matches an existing layout (the verifier reports all sites
+   matching for that layout), add a `BB_PROFILES` row with its CRC, marker and
+   layout, then test.
+4. Otherwise map a new layout: add a column to `BB_CODES` and `BB_IATS` for
+   every address there. Use callers, nearby instructions and global accesses to
+   establish identity; short prologues match many functions. Verify global
+   addresses and structure offsets too: identical data in layouts A and B is
+   not a rule for other builds.
+5. `tools/check_addr.py` (run by `build.sh`) rejects code addresses in the
+   sources that bypass `BB_CODE()`/`BB_A()` or are missing from `BB_CODES`.
+   Relative call sites are retargeted automatically. Keep per-site byte checks
+   and an exact accepted fingerprint; never add a force flag.
+6. Test incrementally: startup, title, menus, pause, gameplay, transitions,
+   save/load, controls, interpolation, draw distance and renderer fallback.
+   Look for rejected writer slots, missing hooks, GL errors and crashes in the
+   log, and state whether Windows and/or Proton were tested.
 
 ## Language-independent UI placement
 
@@ -66,10 +82,10 @@ and exercises lazy/cached acquire/release forwarding from an unsupported host:
 
 ```sh
 i686-w64-mingw32-gcc -std=c11 -Wall -Wextra -Werror -municode tools/test_ddraw_proxy.c -o build/test_ddraw_proxy.exe
-build/test_ddraw_proxy.exe "C:/absolute/path/to/build/spanish/ddraw.dll"
+build/test_ddraw_proxy.exe "C:/absolute/path/to/build/ddraw.dll"
 ```
 
-This test passed on the local Windows system for the experimental DLL. It
+This test passed on the contributor's Windows system. It
 does not exercise rendering, internal lock/unlock signatures or gameplay.
 
 ## Startup logo backgrounds
@@ -80,8 +96,10 @@ infer the drawing path from the presence of DirectDraw or GDI imports.
 The logo image can have a narrow black raster border: sampling at one pixel
 from the viewport edge therefore returns black even on a white-background logo.
 The implementation samples four points 5% inside the viewport and extends a
-colour only if the samples agree within a small tolerance. A two-pixel overlap
-at padded edges covers the residual black raster seam. The viewport, aspect
+colour only if the samples agree within a small tolerance. The thin dark
+raster border is then measured on each edge (its width scales with the output
+resolution, about 3 px at 1200 lines) and painted over together with the bars,
+also where the image touches the window edge. The viewport, aspect
 and central artwork remain unchanged. It restores GL colour/scissor/enable
 and client pixel-pack state, and stops applying once snapshots are published.
 

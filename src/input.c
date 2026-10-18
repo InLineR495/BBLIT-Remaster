@@ -26,8 +26,8 @@
 #define G_NOINPUT    0x4b3e48u  // байт
 #define G_TRANS      0x4b39bcu  // слово
 #define G_PAUSE      0x4b226cu  // байт: пауза и меню
-#define FN_PADUPDATE 0x4491c0u
-#define FN_MAPJOY    0x403010u
+#define FN_PADUPDATE BB_CODE(0x4491c0u)
+#define FN_MAPJOY    BB_CODE(0x403010u)
 
 typedef struct { WORD wButtons; BYTE bLeftTrigger, bRightTrigger; SHORT sThumbLX, sThumbLY, sThumbRX, sThumbRY; } xi_pad;
 typedef struct { DWORD dwPacketNumber; xi_pad Gamepad; } xi_state;
@@ -380,7 +380,7 @@ static int k2_init(void)
     *p++ = 0x89; *p++ = 0x0d; *(uint32_t *)p = 0x4b3e10u; p += 4;          // mov [0x4b3e10],ecx
     *p++ = 0x66; *p++ = 0xc7; *p++ = 0x05; *(uint32_t *)p = (uint32_t)(uintptr_t)&cam_step; p += 4;
     *p++ = 0; *p++ = 0;                                                     // mov word [cam_step],0 — один раз за тик
-    *p++ = 0xe9; *(int32_t *)p = (int32_t)(0x432436u - (uint32_t)(uintptr_t)(p + 4)); p += 4;   // jmp 0x432436
+    *p++ = 0xe9; *(int32_t *)p = (int32_t)(BB_CODE(0x432436u) - (uint32_t)(uintptr_t)(p + 4)); p += 4;   // jmp 0x432436
     *jnz = (uint8_t)(p - (jnz + 1));
     *jz = (uint8_t)(p - (jz + 1));
     *p++ = 0xe9; *(int32_t *)p = (int32_t)(va + 6 - (uint32_t)(uintptr_t)(p + 4)); p += 4;      // orig: jmp 0x4323d4

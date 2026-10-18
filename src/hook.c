@@ -7,15 +7,53 @@
 #include "log.h"
 
 struct site { const char *name; uint32_t va; const char *hex; };
-struct iat  { const char *name; uint32_t va; const char *dll; const char *fn; };
+struct iat  { const char *name; uint32_t va[2]; const char *dll; const char *fn; };
+struct profile { const char *name; uint32_t crc; uint64_t marker; int layout; };
 
 #define BB_SITE_ROW(name, va, bytes) { #name, va, bytes },
 static const struct site sites[] = { BB_SITES(BB_SITE_ROW) };
 #undef BB_SITE_ROW
 
-#define BB_IAT_ROW(name, va, dll, fn) { #name, va, dll, fn },
+#define BB_IAT_ROW(name, va_a, va_b, dll, fn) { #name, { va_a, va_b }, dll, fn },
 static const struct iat iats[] = { BB_IATS(BB_IAT_ROW) };
 #undef BB_IAT_ROW
+
+#define BB_PROFILE_ROW(id, name, crc, marker, layout) { name, crc, marker, layout },
+static const struct profile profiles[] = { BB_PROFILES(BB_PROFILE_ROW) };
+#undef BB_PROFILE_ROW
+
+#define BB_CODE_ROW(a, b) { a, b },
+static const uint32_t codes[][2] = { BB_CODES(BB_CODE_ROW) };
+#undef BB_CODE_ROW
+
+static int host = -1, layout;   // выбранная сборка и её раскладка кода (0 — A, адреса как в исходниках)
+
+int bb_host_select(uint32_t text_crc, uint64_t marker)
+{
+    for (int i = 0; i < BB_PROFILE_COUNT; i++)
+        if (profiles[i].crc == text_crc && profiles[i].marker == marker) {
+            host = i;
+            layout = profiles[i].layout;
+            return i;
+        }
+    return -1;
+}
+
+const char *bb_host_name(void)
+{
+    return host >= 0 ? profiles[host].name : "unknown bugs.exe";
+}
+
+uint32_t bb_code(uint32_t va)
+{
+    if (!layout)
+        return va;
+    for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++)
+        if (codes[i][0] == va)
+            return codes[i][1];
+    bb_log("BB_CODE(%08x): адреса нет в BB_CODES для %s", va, bb_host_name());
+    return 0;
+}
 
 uint32_t bb_crc32(const void *data, size_t len)
 {
@@ -38,7 +76,7 @@ static int hex_nibble(char c)
 }
 
 // "55 8b ec" -> {0x55,0x8b,0xec}; возвращает число байт.
-static size_t parse_hex(const char *s, uint8_t *out, size_t cap)
+size_t bb_parse_hex(const char *s, uint8_t *out, size_t cap)
 {
     size_t n = 0;
     while (*s && n < cap) {
@@ -52,21 +90,41 @@ static size_t parse_hex(const char *s, uint8_t *out, size_t cap)
 
 uint32_t bb_site_va(int site)
 {
-    return sites[site].va;
+    return bb_code(sites[site].va);
+}
+
+// Ожидаемые байты сайта в текущем хосте: строка addr.h, у call rel32 (e8) цель переведена в раскладку хоста.
+static size_t site_bytes(int site, uint8_t *out, size_t cap)
+{
+    size_t n = bb_parse_hex(sites[site].hex, out, cap);
+    if (n == 5 && out[0] == 0xe8) {
+        int32_t rel;
+        memcpy(&rel, out + 1, 4);
+        uint32_t to = bb_code(sites[site].va + 5 + (uint32_t)rel), va = bb_site_va(site);
+        if (!to || !va)
+            return 0;
+        rel = (int32_t)(to - (va + 5));
+        memcpy(out + 1, &rel, 4);
+    }
+    return n;
 }
 
 int bb_site_check(int site)
 {
     uint8_t want[32];
-    size_t n = parse_hex(sites[site].hex, want, sizeof want);
-    const uint8_t *have = (const uint8_t *)(uintptr_t)sites[site].va;
+    size_t n = site_bytes(site, want, sizeof want);
+    uint32_t va = bb_site_va(site);
+    if (!n || !va)
+        return 0;
+    const uint8_t *have = (const uint8_t *)(uintptr_t)va;
     if (memcmp(have, want, n) == 0)
         return 1;
-    char got[3 * 32 + 1] = "";
-    for (size_t i = 0; i < n; i++)
+    char got[3 * 32 + 1] = "", exp[3 * 32 + 1] = "";
+    for (size_t i = 0; i < n; i++) {
         _snprintf(got + 3 * i, 4, "%02x ", have[i]);
-    bb_log("site %s @%08x: ожидалось [%s], в памяти [%s] — патч не ставится",
-           sites[site].name, sites[site].va, sites[site].hex, got);
+        _snprintf(exp + 3 * i, 4, "%02x ", want[i]);
+    }
+    bb_log("site %s @%08x: ожидалось [%s], в памяти [%s] — патч не ставится", sites[site].name, va, exp, got);
     return 0;
 }
 
@@ -112,8 +170,8 @@ void **bb_iat_slot(int iat)
             IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)(base + names[k].u1.AddressOfData);
             if (lstrcmpA((char *)ibn->Name, e->fn) != 0)
                 continue;
-            if ((uintptr_t)&slots[k] != e->va) {
-                bb_log("iat %s: слот %p, а в addr.h %08x — хук не ставится", e->name, (void *)&slots[k], e->va);
+            if ((uintptr_t)&slots[k] != e->va[layout]) {
+                bb_log("iat %s: слот %p, а в addr.h %08x — хук не ставится", e->name, (void *)&slots[k], e->va[layout]);
                 return NULL;
             }
             return (void **)&slots[k];
@@ -164,8 +222,8 @@ static uint8_t *put_rel32(uint8_t *p, uint8_t op, uintptr_t target)
 int bb_detour_pre(int site, void (*pre)(uint32_t *esp))
 {
     uint8_t stolen[32], patch[32];
-    size_t n = parse_hex(sites[site].hex, stolen, sizeof stolen);
-    uint32_t va = sites[site].va;
+    size_t n = site_bytes(site, stolen, sizeof stolen);
+    uint32_t va = bb_site_va(site);
     uint8_t *s, *p;
 
     if (n < 5 || !bb_site_check(site))
@@ -267,8 +325,8 @@ int bb_around_slot(int k, uint32_t slot, uint32_t expect, void (*pre)(int, uint3
 int bb_around_site(int k, int site, void (*pre)(int, uint32_t *), void (*post)(int, uint32_t *))
 {
     uint8_t stolen[16], patch[16], *p;
-    size_t n = parse_hex(sites[site].hex, stolen, sizeof stolen);
-    uint32_t va = sites[site].va;
+    size_t n = site_bytes(site, stolen, sizeof stolen);
+    uint32_t va = bb_site_va(site);
     int32_t rel;
 
     if (k < 0 || k >= AROUND_MAX || n < 5 || n > 8 || !bb_site_check(site))

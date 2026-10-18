@@ -70,6 +70,7 @@ struct bb_config {
     int vb_guard;   // M4g: vblank не дальше этой доли периода (%) после дедлайна тика рисуется до логики; 0 — как раньше
     int title_logo; // плашки титула (логотип, меню) ближе к камере: глубина ×title_logo/100 (в оригинале логотип протыкает машина времени); 0 или 100 — как было
     int hud_edges;  // M5: элементы HUD в левой/правой трети у верхнего/нижнего края — к краям широкого экрана
+    int hud_aspect; // рамка, к краям которой идут счётчики, ×100: 0 — края экрана, 133 — как в оригинале (4:3), 178 — 16:9 (по умолчанию: шире 16:9 HUD не уходит)
     int decals;     // плоские акторы на земле (норы) рисуются как тени — без борьбы с землёй за глубину; 0 — выкл.
     int push_r;     // M8: радиус «цилиндра» Багза для выталкивания модели из толкаемого камня (0 — выкл.)
     int log_sec;    // секундные строки P* в remaster.log (0 — тихий режим: старт, ошибки, события)
@@ -88,6 +89,7 @@ extern HINSTANCE bb_self;
 void bb_config_load(void);
 void bb_config_live(void);   // раз в секунду: [live] render=0/1 (A/B с SSH на лету)
 void bb_entry_stub(void);   // детур entry0 0x451eb0 -> bb_late_init -> 0x451eb5
+extern uint32_t bb_entry_resume;   // адрес продолжения entry0 в раскладке хоста
 void bb_late_init(void);
 void bb_probe_init(void);
 void bb_window_init(void);

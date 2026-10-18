@@ -25,7 +25,7 @@ The time vortex between eras, BBLIT Remaster:
 
 This is not frame interpolation: nothing is guessed from finished images the way TV motion smoothing or frame generation does, so there is no ghosting or warping. Every frame is rendered from the game's own geometry. The mod takes the positions of characters, objects and the camera from two consecutive game ticks and draws the scene in between. Only motion is interpolated: movement, camera and animation. The game logic itself (physics, collisions, enemies, input) still runs at its native 30 ticks per second, exactly as in the original. Because each frame sits between the two latest ticks, the picture trails the game logic by one tick (about 33 ms).
 
-**Widescreen without stretching (Hor+).** 16:9 and 16:10 show more of the world at the sides with correct proportions. HUD counters move to the screen edges, and menus stay centred.
+**Widescreen without stretching (Hor+).** 16:9 and 16:10 show more of the world at the sides with correct proportions. HUD counters move to the screen edges (on screens wider than 16:9 they stay within a 16:9 frame, so you don't have to turn your head; `hud_aspect` changes this), and menus stay centred.
 
 **2× draw distance.** The world is visible twice as far, and characters and items four times as far as in the original. Distant objects fade in smoothly instead of popping in.
 
@@ -55,62 +55,35 @@ This is not frame interpolation: nothing is guessed from finished images the way
 - A palm leaf right in front of the camera no longer cuts holes in Bugs, the time machine and the hub holes behind it.
 - No thin seams along the edges of leaves or square outlines inside the hub holes (the original PC port has them too).
 - The level-entrance vortices in the hub spin smoothly instead of twitching and "restarting" when you walk up to them.
+- No disc needed: the European release's CD check is switched off in memory (the Russian release never had it). The game files are not modified.
+- Save slots in the main menu stay inside their panel instead of one row jumping to the screen edge.
+- Startup logos fill the whole screen with their background instead of sitting between black bars.
 
 **Handheld PCs (Linux/Proton).** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On Windows its own scheduler handles this. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
 
 ## Requirements
 
-- **The PC version of Bugs Bunny: Lost in Time with an unpatched `bugs.exe` v1.6.** Tested with the Russian edition (CITY, translated by "Дядюшка Рисёч"). The supported `bugs.exe`:
+- **The PC version of Bugs Bunny: Lost in Time** with one of these `bugs.exe` files. The mod recognises which one it is at start-up; with any other `bugs.exe` it stays off and the game runs as usual.
 
-  | | |
-  |---|---|
-  | Version | 1.6 |
-  | Size | 772 096 bytes |
-  | SHA-256 | `7342f72443aad4f6efb366449f123dbe2baf7d45cbd1f3e8512aa70506512139` |
-  | MD5 | `6672ce79f18cf5110e00059d5f031a35` |
-  | CRC32 of `.text` (checked by the mod) | `ecffb7c9` |
+  | Edition | Release | `bugs.exe` SHA-256 | Tested |
+  |---|---|---|---|
+  | Europe 1.0, multi-language | Infogrames disc (English, French, German, Italian, Spanish). Usually shared as `Bugs Bunny - Lost in Time [En,Fr,De,It,Es] (PC).iso` | `74ab71e175a3f186460582cf5b870c2d216ff10d7fedd683b960aa59269f1be4` | Linux / Proton |
+  | North America 1.6 | Infogrames disc (English, French, Spanish). Usually shared as `Bugs Bunny Lost in Time.iso` | `6e15f92076614e3ee218c34c5dee566bf273e5bfee77d831cfbf78aa2d29e235` | Linux / Proton |
+  | Russian 1.6 | CITY, translated by "Дядюшка Рисёч" | `7342f72443aad4f6efb366449f123dbe2baf7d45cbd1f3e8512aa70506512139` | Linux / Proton |
+  | Spanish 1.0 | "Bugs Bunny: Perdido en el Tiempo" | `3eae4e369d79a02d0b3cafeb7c5f80f6bbba7cf4ffc02a56876aaa885d5bc050` | Windows, by a contributor |
 
-  To check your copy: on Windows run `certutil -hashfile bugs.exe SHA256` in the `BIN` folder, on Linux run `sha256sum bugs.exe`. If your `bugs.exe` is different, the mod switches itself off and the game runs as usual. `BIN\remaster.log` will then contain the line "не эталонный bugs.exe" ("not the reference bugs.exe"). Other releases with the same code (same `.text` CRC32) will also work. If yours doesn't, open an issue with its hash.
+  All of them are 772 096 bytes. **Not sure which copy to use? Take the European or the North American disc**: they are the most common ones, and with the mod they need neither the disc nor a no-CD patch. To check your copy, run `certutil -hashfile bugs.exe SHA256` in the `BIN` folder on Windows, or `sha256sum bugs.exe` on Linux. Patched copies (no-CD cracks, other mods) have different code and are not supported; use the original `bugs.exe`. With an unsupported file, `BIN\remaster.log` contains the line "неподдерживаемый bugs.exe" ("unsupported bugs.exe"); see [Other editions](#other-editions).
 - A GPU with **OpenGL 4.6** (tested): Mesa (AMD, Intel) on Linux, or a current AMD, NVIDIA or Intel driver on Windows. Older drivers down to OpenGL 3.3 should also work.
 - An XInput gamepad: Xbox-compatible, Steam Deck, Legion Go, or a DualSense through Steam Input. The keyboard works as in the original.
 
 ## Installation
 
-### Reporting an unsupported executable
+### Installing the game from the European or North American disc
 
-When requesting support for another edition, attach `BIN/remaster.log` and
-include the game's language and the output of this read-only check from a
-source checkout (Python 3, no extra packages):
+- **Windows:** run `Setup.exe` from the disc and install as usual.
+- **Linux, Steam Deck:** no installer is needed. Copy the folders `bin`, `bze`, `data`, `speeches` and `track` from the disc's `Datas` folder into a new folder (for example `~/Games/Bugs Bunny`), rename `bin` to `BIN`, and make the copied files writable (`chmod -R u+w ~/Games/Bugs\ Bunny`): saves and settings are written to `BIN`. The game then starts in English.
 
-```sh
-python -I tools/verify_exe.py "/path/to/BIN/bugs.exe"
-```
-
-The output includes the file's SHA-256, actual `.text` CRC32, entry point,
-and comparisons of all hook sites and import slots. Exit status 1 means the
-executable does not match the supported layout. The summary also works in
-Windows consoles that cannot print Cyrillic. Do not bypass the version or
-CRC checks: a different layout needs its own verified addresses, including
-the hardcoded addresses outside `addr.h`. See the [Spanish edition report](docs/spanish-executable.md)
-for one such layout and an experimental, separately built profile. See
-[porting other editions](docs/porting-editions.md) for the address-verification
-workflow; this does not imply support for untested executables or all languages.
-
-### Experimental Spanish-installation profile
-
-For the exact SHA-256 documented in the report, build a separate DLL with:
-
-```sh
-python tools/build_spanish.py "/path/to/BIN/bugs.exe"
-```
-
-This requires Python 3 and i686 MinGW-w64. On MSYS2, use
-`--cc C:/msys64/mingw32/bin/gcc.exe` if the prefixed compiler name is unavailable.
-Copy `build/spanish/ddraw.dll` and `dist/remaster.ini` into `BIN` and use the
-launch arguments below. The tool verifies the exact file hash and all hook
-sites/import slots before compiling. It never modifies or bundles `bugs.exe`.
-Keep the original DLL as a backup. This profile has limited Windows testing;
-it is not part of the default release build.
+Some copies of the disc image are raw CD images (2352-byte sectors) despite the `.iso` name, and archive managers or `mount` cannot open them. Convert such an image first, for example with `iat image.iso fixed.iso` (package `iat`).
 
 Download `BBLIT-Remaster-1.0-beta.zip` from [Releases](../../releases) and extract it into the game folder. `ddraw.dll` and `remaster.ini` must end up in the `BIN` folder, next to `bugs.exe`.
 
@@ -135,7 +108,7 @@ Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these ar
 
 ### Windows
 
-> Not yet tested on real Windows. If you try it, please report how it went in the issues.
+> Tested on Windows by a contributor with the Spanish edition. If you try it, please report how it went in the issues.
 
 1. Copy `ddraw.dll` and `remaster.ini` into the game's `BIN` folder.
 2. Create a shortcut to `BIN\bugs.exe` and add the arguments after the quotes in the shortcut's "Target" field:
@@ -152,13 +125,6 @@ Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these ar
 5. With display scaling above 100 %, the mod switches the game to DPI-aware mode, so it renders at full resolution.
 
 ### Checking that it works
-
-Startup logos with a uniform background can extend that background into the
-side bars without stretching their artwork (`splash_fill=1`, enabled by default).
-The colour is sampled slightly inside the displayed image, avoiding its thin
-black raster border; a two-pixel overlap covers the remaining edge seam.
-Nonuniform corner colours retain the original bars.
-Set `splash_fill=0` in `[remaster]` to retain the original presentation.
 
 After launch, `remaster.log` appears in `BIN`, and its first lines contain `BBLIT Remaster 1.0-beta`. The picture fills the whole wide screen, and the right stick turns the camera.
 
@@ -194,17 +160,29 @@ The main settings live in `BIN\remaster.ini` and are commented there. The `[live
 | `ps1_light` | `[live]` | 18 | World brightness ×10: 20 = exactly as on the PS1, 10 = like the PC port, 0 = PC port path |
 | `xinput` | `[remaster]` | 1 | 0 = original gamepad handling |
 | `big_cores` | `[remaster]` | 1 | Pin the main thread to the fast cores on hybrid CPUs (Linux/Proton) |
+| `hud_aspect` | `[live]` | 178 | Widest frame for the HUD counters, aspect ratio ×100: 178 = a 16:9 frame (the screen edges on 16:9 and 16:10 screens, closer to the centre on ultrawide ones), 0 = always the screen edges, 133 = the original 4:3 positions |
+| `splash_fill` | `[remaster]` | 1 | Startup logos: extend their plain background into the side bars; 0 = black bars as in the original |
 
 ## Known beta limitations
 
 - Textures are the original ones, with no replacement or upscaling.
 - At a low TDP, the heaviest scenes occasionally (about once per second) repeat one frame.
-- Windows is untested.
-- Only an unpatched `bugs.exe` 1.6 is supported.
+- Windows has only been tested by a contributor, with the Spanish edition.
+- Only the editions listed under [Requirements](#requirements) are supported.
+
+## Other editions
+
+If your `bugs.exe` is not in the table above, open an issue and attach `BIN/remaster.log` together with the output of this read-only check (Python 3, no extra packages):
+
+```sh
+python3 -I tools/verify_exe.py "/path/to/BIN/bugs.exe"
+```
+
+It prints the file's SHA-256, its `.text` CRC32 and how many hook sites match each known code layout. Please don't bypass the checks: another edition needs every code address the mod uses mapped and verified ([docs/porting-editions.md](docs/porting-editions.md)).
 
 ## Building from source
 
-You need the MinGW-w64 cross-compiler for i686:
+You need the MinGW-w64 cross-compiler for i686 and Python 3 (`build.sh` first checks that every code address in the sources goes through the edition table):
 
 ```
 # Ubuntu/Debian: sudo apt install gcc-mingw-w64-i686
@@ -215,7 +193,7 @@ You need the MinGW-w64 cross-compiler for i686:
 GitHub Actions builds every push. A `v*` tag publishes a release with the ready-to-use archive.
 
 How it works:
-- `ddraw.dll` is a proxy. It forwards DirectDraw to the system DLL and installs hooks into `bugs.exe` 1.6, after checking the version and the CRC32 of the code.
+- `ddraw.dll` is a proxy. It forwards DirectDraw to the system DLL, recognises the edition of `bugs.exe` by the CRC32 of its code, translates its hook addresses to that edition's code layout (`src/addr.h`) and installs the hooks, checking the expected bytes at every site first.
 - The engine's OpenGL calls are recorded into snapshots, one per logic tick.
 - The mod's own renderer (OpenGL 4.6, shaders) draws the frames between snapshots with interpolation.
 - XInput input is fed into the game's own gamepad parser.

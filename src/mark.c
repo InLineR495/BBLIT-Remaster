@@ -71,15 +71,16 @@ static uint8_t actor_fl(uint32_t actor)
     return type == 9 ? BB_VF_NOFOG | BB_VF_SKY : BB_VF_NOFOG;
 }
 
+// expect — функция в раскладке A (адрес слота — данные, во всех сборках один)
 static const struct { uint32_t slot, expect; uint8_t kind; } writers[] = {
-    { 0x4b1aa4, 0x40fa90, BB_TAG_BLOCK },    // C2 комнаты
-    { 0x7c9618, 0x411350, BB_TAG_PART },     // C4 части: актор / тень / 3D-HUD — по адресу возврата
-    { 0x7c624c, 0x40a6c0, BB_TAG_BB },       // C6 билборды
-    { 0x7c6250, 0x40b130, BB_TAG_TEXT },     // C7 текст
-    { 0x4b1a5c, 0x40b980, BB_TAG_OVL },      // C7 фейд-оверлеи
-    { 0x4b1a60, 0x40be10, BB_TAG_OVL },
-    { 0x4b1a64, 0x40c5e0, BB_TAG_BARS },     // C7 киношные полосы
-    { 0x4b1a68, 0x40c850, BB_TAG_HUDBAR },   // C7 полоска HUD
+    { 0x4b1aa4, BB_A(0x40fa90), BB_TAG_BLOCK },    // C2 комнаты
+    { 0x7c9618, BB_A(0x411350), BB_TAG_PART },     // C4 части: актор / тень / 3D-HUD — по адресу возврата
+    { 0x7c624c, BB_A(0x40a6c0), BB_TAG_BB },       // C6 билборды
+    { 0x7c6250, BB_A(0x40b130), BB_TAG_TEXT },     // C7 текст
+    { 0x4b1a5c, BB_A(0x40b980), BB_TAG_OVL },      // C7 фейд-оверлеи
+    { 0x4b1a60, BB_A(0x40be10), BB_TAG_OVL },
+    { 0x4b1a64, BB_A(0x40c5e0), BB_TAG_BARS },     // C7 киношные полосы
+    { 0x4b1a68, BB_A(0x40c850), BB_TAG_HUDBAR },   // C7 полоска HUD
 };
 
 static uint32_t entry_idx[256], entry_obj[256];
@@ -104,15 +105,20 @@ static uint16_t bb_ordinal(uint32_t actor)
     return 0;
 }
 uint32_t bb_mark_written[BB_TAG_COUNT], bb_mark_anomaly;
+static uint32_t ret_actor, ret_shadow, ret_hud3d[2];   // адреса возврата из 0x411350 в раскладке хоста (bb_mark_init)
 
 static void w_pre(int k, uint32_t *esp)
 {
     uint8_t kind = writers[k].kind;
     if (kind == BB_TAG_PART) {
-        switch (esp[0]) {
-        case 0x44ca31: kind = BB_TAG_ACTOR; bb_p7_part(esp[1]); break;
-        case 0x44be06: kind = BB_TAG_SHADOW; break;
-        case 0x44b456: case 0x44b482: kind = BB_TAG_HUD3D; break;
+        uint32_t ret = esp[0];
+        if (ret == ret_actor) {
+            kind = BB_TAG_ACTOR;
+            bb_p7_part(esp[1]);
+        } else if (ret == ret_shadow) {
+            kind = BB_TAG_SHADOW;
+        } else if (ret == ret_hud3d[0] || ret == ret_hud3d[1]) {
+            kind = BB_TAG_HUD3D;
         }
     }
     uint32_t obj = 0;
@@ -190,13 +196,19 @@ static void on_begin_build_post(int k, uint32_t *esp)
 
 void bb_mark_install_slots(void)
 {
-    for (int k = 0; k < (int)(sizeof writers / sizeof writers[0]); k++)
-        if (bb_around_slot(k, writers[k].slot, writers[k].expect, w_pre, w_post))
-            bb_log("P6: слот [%08x] (%08x) -> обёртка %d", writers[k].slot, writers[k].expect, k);
+    for (int k = 0; k < (int)(sizeof writers / sizeof writers[0]); k++) {
+        uint32_t expect = bb_code(writers[k].expect);
+        if (expect && bb_around_slot(k, writers[k].slot, expect, w_pre, w_post))
+            bb_log("P6: слот [%08x] (%08x) -> обёртка %d", writers[k].slot, expect, k);
+    }
 }
 
 void bb_mark_init(void)
 {
+    ret_actor = BB_CODE(0x44ca31u);
+    ret_shadow = BB_CODE(0x44be06u);
+    ret_hud3d[0] = BB_CODE(0x44b456u);
+    ret_hud3d[1] = BB_CODE(0x44b482u);
     bb_around_site(11, BB_SITE_BEGINBUILD, on_begin_build, on_begin_build_post);
 }
 

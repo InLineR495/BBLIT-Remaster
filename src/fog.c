@@ -375,16 +375,16 @@ static void ft_init(void)
     B(0x3a, 0xca);                              // +0d cmp cl,dl
     B(0x7e, 0x0d);                              // +0f jle +0x1e (флаг 2)
     B(0x8d, 0x0c, 0x80);                        // +11 lea ecx,[eax+eax*4]
-    JMP(0x410fb4);                              // +14 → флаг 1
-    JMP(0x410f74);                              // +19 → сток (lea; jg по тем же флагам)
+    JMP(BB_CODE(0x410fb4u));                    // +14 → флаг 1
+    JMP(BB_CODE(0x410f74u));                    // +19 → сток (lea; jg по тем же флагам)
     B(0x8d, 0x0c, 0x80);                        // +1e lea ecx,[eax+eax*4]
     B(0xc1, 0xe1, 0x02);                        // +21 shl ecx,2
     B(0x33, 0xd2);                              // +24 xor edx,edx
     B(0x66, 0x8b, 0x15, 0xde, 0x39, 0x4b, 0x00);                // +26 mov dx,[0x4b39de]
     B(0x66, 0xc7, 0x81, 0x62, 0x34, 0x4b, 0x00, 0x02, 0x00);    // +2d mov word [ecx+0x4b3462],2
     B(0x3b, 0xd3);                              // +36 cmp edx,ebx
-    *p++ = 0x0f; *p++ = 0x8e; *(int32_t *)p = (int32_t)(0x410fc0 - (uintptr_t)(p + 4)); p += 4;   // +38 jle 0x410fc0
-    JMP(0x410f90);                              // +3e → скрытый список
+    *p++ = 0x0f; *p++ = 0x8e; *(int32_t *)p = (int32_t)(BB_CODE(0x410fc0u) - (uintptr_t)(p + 4)); p += 4;   // +38 jle 0x410fc0
+    JMP(BB_CODE(0x410f90u));                    // +3e → скрытый список
 #undef B
 #undef JMP
     if (p - ft_stub != 0x43) {

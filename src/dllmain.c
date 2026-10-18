@@ -1,7 +1,7 @@
 // BBLIT Modern — прокси ddraw.dll. bugs.exe импортирует DDRAW.dll статически,
 // поэтому под Proton (WINEDLLOVERRIDES=ddraw=n,b) эта DLL грузится до main().
-// DllMain: проверка хоста (база, версия, CRC32 .text) и детур entry0 -> LateInit.
-// Если хост не эталонный 1.6 или REMASTER_OFF — только проброс DirectDraw в системную ddraw.
+// DllMain: выбор сборки хоста (база, CRC32 .text, маркер — BB_PROFILES) и детур entry0 -> LateInit.
+// Если сборка неизвестна или REMASTER_OFF — только проброс DirectDraw в системную ddraw.
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
@@ -61,23 +61,22 @@ FARPROC bb_ddraw_export(const char *name)
     return fn;
 }
 
-// Эталон 1.6: база 0x400000, маркер версии и CRC32 .text (маркер не отличает hpRT, CRC отличает).
-static int host_is_reference(void)
+// Сборка хоста: база 0x400000, CRC32 .text и маркер по таблице BB_PROFILES (addr.h). Неизвестная сборка (другой
+// выпуск или пропатченный exe) — 0: мод не ставится, только проброс DirectDraw.
+static int host_detect(void)
 {
     uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
     IMAGE_SECTION_HEADER *sections = IMAGE_FIRST_SECTION(nt);
     uint64_t v = 0;
     SIZE_T got = 0;
-    uint32_t crc;
+    uint32_t crc = 0;
+    int text_ok = 0;
 
-    if ((uintptr_t)GetModuleHandleA(NULL) != BB_IMAGE_BASE) {
-        bb_log("host: база %p, не 0x400000", (void *)GetModuleHandleA(NULL));
+    if ((uintptr_t)base != BB_IMAGE_BASE) {
+        bb_log("host: база %p, не 0x400000", (void *)base);
         return 0;
     }
-    // Other editions may have a different layout. Report their actual code
-    // fingerprint even when the reference version marker does not match.
-    // All existing acceptance checks below remain required.
     bb_log("host: PE timestamp=%08lx image_size=%08lx entry=%08lx",
            (unsigned long)nt->FileHeader.TimeDateStamp,
            (unsigned long)nt->OptionalHeader.SizeOfImage,
@@ -89,23 +88,21 @@ static int host_is_reference(void)
         if (s->VirtualAddress > nt->OptionalHeader.SizeOfImage ||
             s->SizeOfRawData > nt->OptionalHeader.SizeOfImage - s->VirtualAddress)
             break;
-        bb_log("host: actual .text VA=%08lx raw_size=%08lx CRC32=%08x",
-               (unsigned long)(BB_IMAGE_BASE + s->VirtualAddress),
-               (unsigned long)s->SizeOfRawData,
-               bb_crc32(base + s->VirtualAddress, s->SizeOfRawData));
+        crc = bb_crc32(base + s->VirtualAddress, s->SizeOfRawData);
+        text_ok = BB_IMAGE_BASE + s->VirtualAddress == BB_TEXT_VA && s->SizeOfRawData == BB_TEXT_SIZE;
+        bb_log("host: .text VA=%08lx raw_size=%08lx CRC32=%08x",
+               (unsigned long)(BB_IMAGE_BASE + s->VirtualAddress), (unsigned long)s->SizeOfRawData, crc);
         break;
     }
-    if (!ReadProcessMemory(GetCurrentProcess(), (void *)BB_VERSION_ADDR, &v, sizeof v, &got) || got != sizeof v
-        || v != BB_VERSION_1_6) {
-        bb_log("host: reference marker @%08x: read=%lu bytes, value=%016llx (expected %016llx)",
-               BB_VERSION_ADDR, (unsigned long)got,
-               (unsigned long long)v, (unsigned long long)BB_VERSION_1_6);
-        bb_log("host: маркер версии 1.6 не найден");
+    if (!ReadProcessMemory(GetCurrentProcess(), (void *)BB_MARKER_ADDR, &v, sizeof v, &got) || got != sizeof v)
+        v = 0;
+    if (!text_ok || bb_host_select(crc, v) < 0) {
+        bb_log("host: неизвестная сборка: CRC32 .text %08x, маркер @%08x = %016llx", crc, BB_MARKER_ADDR,
+               (unsigned long long)v);
         return 0;
     }
-    crc = bb_crc32((const void *)BB_TEXT_VA, BB_TEXT_SIZE);
-    bb_log("host: %s, CRC32 .text = %08x (эталон %08x)", BB_HOST_NAME, crc, BB_TEXT_CRC32);
-    return crc == BB_TEXT_CRC32;
+    bb_log("host: %s, CRC32 .text = %08x", bb_host_name(), crc);
+    return 1;
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
@@ -117,11 +114,12 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         bb_log_open(inst);
         bb_config_load();
         bb_log("attach: BBLIT Remaster %s, pid=%lu dll=%p exe=%s", BB_VERSION, GetCurrentProcessId(), (void *)inst, GetCommandLineA());
-        if (!host_is_reference())
-            bb_log("attach: не эталонный bugs.exe — только проброс DirectDraw");
+        if (!host_detect())
+            bb_log("attach: неподдерживаемый bugs.exe — только проброс DirectDraw");
         else if (bb_cfg.off)
             bb_log("attach: REMASTER_OFF — только проброс DirectDraw");
-        else if (bb_site_check(BB_SITE_ENTRY0) && bb_patch_jmp(bb_site_va(BB_SITE_ENTRY0), (void *)bb_entry_stub))
+        else if ((bb_entry_resume = BB_CODE(0x451eb5u)) && bb_site_check(BB_SITE_ENTRY0) &&
+                 bb_patch_jmp(bb_site_va(BB_SITE_ENTRY0), (void *)bb_entry_stub))
             bb_log("attach: entry0 %08x -> LateInit", bb_site_va(BB_SITE_ENTRY0));
     } else if (reason == DLL_PROCESS_DETACH) {
         if (bb_cfg.probes && !bb_cfg.off)

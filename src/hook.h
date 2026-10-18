@@ -4,6 +4,7 @@
 #include "addr.h"
 
 uint32_t bb_crc32(const void *data, size_t len);
+size_t bb_parse_hex(const char *s, uint8_t *out, size_t cap);   // "55 8b ec" -> байты
 
 // Сайты кода из BB_SITES: VA, сверка ожидаемых байт, запись.
 uint32_t bb_site_va(int site);

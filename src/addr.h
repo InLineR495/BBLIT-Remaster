@@ -1,17 +1,29 @@
-// Адреса bugs.exe v1.6 (эталон md5 6672ce79f18cf5110e00059d5f031a35) и ожидаемые байты.
-// Строки BB_SITE/BB_IAT разбирает tools/verify_exe.py — формат не менять.
+// Адреса bugs.exe и ожидаемые байты.
+// Исходники пишут адреса кода эталона 1.6 (раскладка A, md5 6672ce79f18cf5110e00059d5f031a35). Для сборок с другой
+// раскладкой кода их переводит BB_CODE() по таблице BB_CODES. Данные (.rdata, .data, .bss) во всех известных сборках
+// лежат на тех же адресах: сверено по всем обращениям кода к данным (docs/porting-editions.md).
+// Строки BB_PROFILES/BB_SITES/BB_IATS/BB_CODES разбирает tools/verify_exe.py, адреса кода в исходниках сверяет
+// tools/check_addr.py — формат не менять.
 // Перед каждой записью код сверяет байты сайта; при несовпадении патч не ставится.
 #pragma once
+#include <stdint.h>
 
 #define BB_IMAGE_BASE        0x400000u
-#define BB_HOST_NAME         "bugs.exe 1.6"
-#define BB_VERSION_ADDR      0x45ca00u
-#define BB_VERSION_1_6       0x3fe5555555555555ull
+#define BB_MARKER_ADDR       0x45ca00u      // qword в .rdata: отпечаток сборки (у раскладок A и B разный), не номер версии
 #define BB_TEXT_VA           0x401000u
 #define BB_TEXT_SIZE         0x5a400u       // raw 0x400..0x5a800
-#define BB_TEXT_CRC32        0xecffb7c9u    // hpRT и прочие сборки дают другой CRC
 
-// X(имя, VA, "ожидаемые байты")
+// Известные сборки: P(id, "название", CRC32 .text, маркер, раскладка кода: 0 — A, 1 — B).
+// A — 1.6 от 26.09.1999: североамериканский диск (англ./франц./исп.) и русская CITY — тот же exe, у CITY снята проверка
+// диска и переведена строка ресурса. B — 1.0 от 12.10.1999: европейский мультиязычный диск Infogrames и испанское
+// издание (CRC разный, раскладка кода одна). Пропатченные сборки (hpRT и т. п.) дают другой CRC — мод выключается.
+#define BB_PROFILES(P) \
+    P(RU16, "bugs.exe 1.6 (Russian, CITY)",              0xecffb7c9u, 0x3fe5555555555555ull, 0) \
+    P(NA16, "bugs.exe 1.6 (North America, En/Fr/Es)",    0xc1d00325u, 0x3fe5555555555555ull, 0) \
+    P(EU10, "bugs.exe 1.0 (Europe, multi-language)",     0x873df3b9u, 0x3fe2d2d2d2d2d2d3ull, 1) \
+    P(ES10, "bugs.exe 1.0 (Spanish, Perdido en el Tiempo)", 0x4df536d5u, 0x3fe2d2d2d2d2d2d3ull, 1)
+
+// X(имя, VA раскладки A, "ожидаемые байты"). VA раскладки B — по BB_CODES; у call rel32 (e8) цель тоже переводится.
 #define BB_SITES(X) \
     X(ENTRY0,     0x451eb0, "55 8b ec 6a ff") \
     X(FRAMETICK,  0x4065e0, "55 8b ec 83 ec 20") \
@@ -43,28 +55,68 @@
     X(N2_MAPPAD,   0x449223, "e8 e8 9d fb ff") \
     X(K2_CAM,      0x4323ce, "8b 1d 40 39 4b 00")
 
-// I(имя, VA слота IAT, "DLL", "функция")
+// I(имя, VA слота IAT в раскладке A, в раскладке B, "DLL", "функция"). В B импорт длиннее (OemKeyScan) — слоты сдвинуты.
 #define BB_IATS(I) \
-    I(DDRAW_CREATE,    0x9cc28c, "DDRAW.dll",    "DirectDrawCreate") \
-    I(DDRAW_ENUM_A,    0x9cc290, "DDRAW.dll",    "DirectDrawEnumerateA") \
-    I(FREELIBRARY,     0x9cc2c8, "KERNEL32.dll", "FreeLibrary") \
-    I(GETPROCADDRESS,  0x9cc2d8, "KERNEL32.dll", "GetProcAddress") \
-    I(LOADLIBRARYA,    0x9cc2dc, "KERNEL32.dll", "LoadLibraryA") \
-    I(CREATEWINDOWEXA, 0x9cc41c, "USER32.dll",   "CreateWindowExA") \
-    I(SETWINDOWPOS,    0x9cc3fc, "USER32.dll",   "SetWindowPos")
+    I(DDRAW_CREATE,    0x9cc28c, 0x9cc290, "DDRAW.dll",    "DirectDrawCreate") \
+    I(DDRAW_ENUM_A,    0x9cc290, 0x9cc294, "DDRAW.dll",    "DirectDrawEnumerateA") \
+    I(FREELIBRARY,     0x9cc2c8, 0x9cc2cc, "KERNEL32.dll", "FreeLibrary") \
+    I(GETPROCADDRESS,  0x9cc2d8, 0x9cc2dc, "KERNEL32.dll", "GetProcAddress") \
+    I(LOADLIBRARYA,    0x9cc2dc, 0x9cc2e0, "KERNEL32.dll", "LoadLibraryA") \
+    I(CREATEWINDOWEXA, 0x9cc41c, 0x9cc428, "USER32.dll",   "CreateWindowExA") \
+    I(SETWINDOWPOS,    0x9cc3fc, 0x9cc3f8, "USER32.dll",   "SetWindowPos")
+
+// C(VA раскладки A, VA раскладки B) — все адреса кода, которые используют исходники (сайты, функции, цели переходов
+// заглушек, адреса возврата). Сопоставлены выравниванием дизассемблеров 1.6 и 1.0: функции те же, сдвинуты вставками.
+#define BB_CODES(C) \
+    C(0x403010, 0x403010) C(0x405c26, 0x405c26) C(0x405d1f, 0x405d1f) C(0x405ea9, 0x405ea9) C(0x4065e0, 0x406600) C(0x40660b, 0x40662b) \
+    C(0x406851, 0x406871) C(0x4069c0, 0x4069e0) C(0x406be1, 0x406c01) C(0x406d4c, 0x406d6c) \
+    C(0x406ee0, 0x406f00) C(0x409a10, 0x409a40) C(0x40a6c0, 0x40a720) C(0x40b130, 0x40b190) \
+    C(0x40b980, 0x40b9e0) C(0x40be10, 0x40be70) C(0x40c5e0, 0x40c640) C(0x40c850, 0x40c8b0) \
+    C(0x40cc80, 0x40cce0) C(0x40ceb0, 0x40cf10) C(0x40e323, 0x40e37f) C(0x40e790, 0x40e820) \
+    C(0x40fa90, 0x40fb20) C(0x40fdc0, 0x40fe50) C(0x410070, 0x410100) C(0x4100ba, 0x41014a) \
+    C(0x410b62, 0x410bf2) C(0x410bbe, 0x410c4e) C(0x410c15, 0x410ca5) C(0x410f6f, 0x410fff) \
+    C(0x410f74, 0x411004) C(0x410f90, 0x411020) C(0x410fb4, 0x411044) C(0x410fc0, 0x411050) \
+    C(0x411350, 0x4113e0) C(0x411c7d, 0x411d0d) C(0x4124b0, 0x412540) C(0x414590, 0x414620) \
+    C(0x414b40, 0x414bd0) C(0x414c0a, 0x414c9a) C(0x42e050, 0x42e0f0) C(0x42e7a0, 0x42e910) \
+    C(0x4323ce, 0x43253e) C(0x432436, 0x4325a6) C(0x447a50, 0x447bc0) C(0x447f3a, 0x4480aa) \
+    C(0x448074, 0x4481e4) C(0x4481c7, 0x448337) C(0x4481d1, 0x448341) C(0x4484b7, 0x448627) \
+    C(0x4484bd, 0x44862d) C(0x448d40, 0x448eb0) C(0x4491c0, 0x449330) C(0x449223, 0x449393) \
+    C(0x44b456, 0x44b5c6) C(0x44b482, 0x44b5f2) C(0x44be06, 0x44bf76) C(0x44c981, 0x44caf1) \
+    C(0x44ca31, 0x44cba1) C(0x451eb0, 0x452050) C(0x451eb5, 0x452055)
+
+// Адрес кода раскладки A -> адрес в текущем хосте (0 — нет в BB_CODES; tools/check_addr.py не даёт до этого дойти).
+uint32_t bb_code(uint32_t va);
+#define BB_CODE(va) bb_code(va)
+// Адрес кода раскладки A в таблице-инициализаторе: переводится bb_code() там, где используется.
+#define BB_A(va) (va)
+
+// Проверка диска при запуске (main): нет диска с меткой BBLIT — окно «Please insert the Bugs Bunny Lost In Time
+// CD-ROM» и повтор. В 1.6 её сняла CITY (mov esi,1; jmp), в 1.0 она есть — мод снимает её в памяти (lateinit.c).
+#define BB_CD_CHECK_VA       BB_A(0x405c26u)    // test esi,esi; jne BB_CD_CHECK_GO (диск найден)
+#define BB_CD_CHECK_GO       BB_A(0x405d1fu)
+#define BB_CD_CHECK_BYTES    "85 f6 0f 85 f1 00 00 00"
+#define BB_CD_CHECK_REMOVED  "be 01 00 00 00 e9"     // уже снята в самом exe
 
 // Слоты диспетчера рендера (пишет Reinit, в файле нули) и функции, на которые они указывают.
 #define BB_SLOT_DRAW         0x4b1a70u      // C8: WM_PAINT 0x40e323 call [slot]
-#define BB_FN_DRAW           0x4124b0u      // Draw3DFrame: сортировка + отрисовка, без аргументов
+#define BB_FN_DRAW           BB_CODE(0x4124b0u)   // Draw3DFrame: сортировка + отрисовка, без аргументов
 #define BB_SLOT_EMIT_TRI     0x4b1a78u      // G4-E1: emit(arena_ptr, 5 дескрипторов) -> байт, cdecl
-#define BB_FN_EMIT_TRI       0x414590u
+#define BB_FN_EMIT_TRI       BB_CODE(0x414590u)
 #define BB_SLOT_EMIT_QUAD    0x4b1a74u      // G4-E2
-#define BB_FN_EMIT_QUAD      0x414b40u
+#define BB_FN_EMIT_QUAD      BB_CODE(0x414b40u)
 
 #define BB_ENUM_SITE(name, va, bytes) BB_SITE_##name,
 enum { BB_SITES(BB_ENUM_SITE) BB_SITE_COUNT };
 #undef BB_ENUM_SITE
 
-#define BB_ENUM_IAT(name, va, dll, fn) BB_IAT_##name,
+#define BB_ENUM_IAT(name, va_a, va_b, dll, fn) BB_IAT_##name,
 enum { BB_IATS(BB_ENUM_IAT) BB_IAT_COUNT };
 #undef BB_ENUM_IAT
+
+#define BB_ENUM_PROFILE(id, name, crc, marker, layout) BB_PROFILE_##id,
+enum { BB_PROFILES(BB_ENUM_PROFILE) BB_PROFILE_COUNT };
+#undef BB_ENUM_PROFILE
+
+// Выбор сборки по CRC32 .text и маркеру: индекс BB_PROFILE_* или -1. Ставит раскладку для bb_code/сайтов/IAT.
+int bb_host_select(uint32_t text_crc, uint64_t marker);
+const char *bb_host_name(void);
