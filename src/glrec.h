@@ -61,6 +61,7 @@ struct bb_snapshot {
 };
 
 extern int bb_gl_sink;                                 // 1 — геометрия движка не идёт в драйвер
+extern uint32_t bb_tex_seq[0x800];                     // имя текстуры → номер её последней загрузки (0 — не было)
 extern LARGE_INTEGER bb_swap_t0, bb_swap_t1;           // последний wglSwapBuffers (разбивка тика)
 void *bb_gl_intercept(const char *name, void *real);   // из хука GetProcAddress для opengl32
 void bb_rec_begin(void);

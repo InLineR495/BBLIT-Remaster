@@ -381,10 +381,15 @@ static void WINAPI w_glBindTexture(unsigned target, unsigned id)
     r_glBindTexture(target, id);
 }
 
+uint32_t bb_tex_seq[0x800];          // имя текстуры → порядковый номер её последней загрузки (уровень 0)
+static uint32_t tex_seq_n;
+
 static void WINAPI w_glTexImage2D(unsigned target, int level, int ifmt, int w, int h, int border, unsigned fmt,
                                   unsigned type, const void *px)
 {
     st.tex_uploads++;
+    if (level == 0 && sh.tex < 0x800)
+        bb_tex_seq[sh.tex] = ++tex_seq_n;
     if ((sh.tex < 1 || sh.tex > 0x7cb) && (st.canary_upload++, upload_logged++ < 5))  // канарейка G1e
         bb_log("G1e: glTexImage2D в имя %u вне [1, 0x7cb] (%dx%d)", sh.tex, w, h);
     r_glTexImage2D(target, level, ifmt, w, h, border, fmt, type, px);

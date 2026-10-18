@@ -1606,6 +1606,9 @@ static int is_wide_overlay(const struct bb_snapshot *s, const struct bb_prim *p)
 
 // Варианты текстур под режимы полупрозрачности PS1 (ABR 0..3): [0x52fd74 + 48·id + 4·abr] (эмиттер 0x41493a).
 // Движок конвертирует копию текстуры под режим (0x420d90, BBLIT-Findings 306/N68) и рисует её одним SRC_ALPHA.
+// После смены уровня в таблице остаются ссылки на имена, которые новый уровень занял обычными текстурами: острова
+// на горизонте L03A (текстура 1) считались вариантом ABR 2 и пропадали за вычитанием (trace 2026-10-18). Вариант
+// делается из уже загруженной базы, поэтому принимается, только если загружен позже неё (bb_tex_seq).
 static int8_t variant_mode[0x800];      // id текстуры → режим ABR (−1 — не вариант)
 static uint32_t variant_scan_build;
 
@@ -1621,7 +1624,7 @@ static void scan_variants(uint32_t build_id)
     for (uint32_t id = 1; id <= max; id++)
         for (int abr = 0; abr < 4; abr++) {
             uint32_t v = *(volatile uint32_t *)(uintptr_t)(0x52fd74u + 48 * id + 4 * abr);
-            if (v > 0 && v < sizeof variant_mode)
+            if (v > 0 && v < sizeof variant_mode && bb_tex_seq[v] > bb_tex_seq[id])
                 variant_mode[v] = (int8_t)abr;
         }
 }
@@ -1999,6 +2002,8 @@ static uint32_t gncmd[NLIST];
 // Наклейка — актор из 3–64 вершин, почти плоский и горизонтальный: перепад высоты < 10 % ширины и ≤ 40 ед.
 // Рисуется как тень — списком 4 после земли и до акторов, глубина подтянута к камере, без записи глубины.
 // Камень или ящик сюда не попадает (высота сравнима с шириной), иначе сквозь них просвечивали бы акторы позади.
+// Совсем плоский (перепад < 2 ед.) — только небольшой (≤ 400 ед.): плавучий настил в доках L03A (актор 034ece10,
+// 26 вершин, 1182×2129, ровно плоский) уходил в наклейки и рисовался полупрозрачно поверх моря (2026-10-18).
 #define DC_BITS 12
 static struct dc_obj { uint32_t obj; float lo, hi, x0, x1, z0, z1; uint32_t nv; } dc_tab[1 << DC_BITS];
 static uint32_t dc_build = ~0u, dc_count;
@@ -2025,7 +2030,7 @@ static struct dc_obj *dc_find(uint32_t obj, int add)
 static int dc_is_flat(const struct dc_obj *e)
 {
     float h = e->hi - e->lo, wd = fmaxf(e->x1 - e->x0, e->z1 - e->z0);
-    return e->nv >= 3 && e->nv <= 64 && h <= 40.0f && (h < 2.0f || h < 0.1f * wd);
+    return e->nv >= 3 && e->nv <= 64 && h <= 40.0f && (h < 2.0f ? wd <= 400.0f : h < 0.1f * wd);
 }
 
 static void dc_scan(const struct bb_snapshot *b)
