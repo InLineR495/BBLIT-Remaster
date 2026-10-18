@@ -88,6 +88,7 @@ struct bb_config {
     int alpha_split; // смешивание по альфе текстуры с записью глубины — два прохода: прозрачное не заслоняет акторов
     int ps1_stp;    // тексели без бита STP (альфа варианта выше предела режима) в PS1-смешивании непрозрачны; 0 — всё смешивается
     int ps1_gain;   // M4b: яркость F в PS1-смешивании, ×10 (10 — цвет вершины /255, как на ПК; 20 — /128, как на PS1)
+    int fix_sfx;    // звук (sfx.c): позиционная петля вне слышимости — 0 сиротеет и играет вечно (оригинал), 1 — стоп и возврат при подходе (виртуальный голос; по умолчанию), 2 — только штатный стоп
 };
 
 extern struct bb_config bb_cfg;
@@ -107,3 +108,6 @@ void bb_probe_exit(void);
 uint32_t bb_level_loads(void);       // счётчик загрузок уровня (растёт на каждой LVL #)
 void bb_input_init(void);            // M6: XInput, аналог, буфер прыжка, пауза с пада
 void bb_input_log_second(void);
+void bb_sfx_init(void);              // звук: сайты 0x41da00/0x41edb0/0x41f2e1/0x41f3d4 (sfx.c)
+void bb_sfx_log_second(void);        // строка P32 (раз в секунду, probe.c)
+void bb_sfx_dump(void);              // [live] snd_dump=1: голоса 0x4b3260 и петли 0x553200 в лог

@@ -12,6 +12,7 @@ First public release: Bugs Bunny: Lost in Time on a modern renderer.
 - No disc needed: the CD check of the European and North American releases is switched off in memory (the Russian release never had it). The game files are not modified.
 - HUD counters stay within a 16:9 frame on ultrawide screens (`hud_aspect`); startup logos fill the whole screen.
 - "Hey What's Up, Dock?": diving into the burrow by the floating barrels no longer throws Bugs back; no palm tree "stuck" on the ship, the floating platform is drawn as ground, Bugs' shadow falls on the barrel, and the helm and the drawbridge no longer pop in and out.
+- Looping sounds (torch fire, fuses) no longer play forever after Bugs walks away.
 
 **Install.** Extract the archive into the game folder (`ddraw.dll` and `remaster.ini` go into `BIN`) and run `BIN\bugs.exe /opengl /win /b0 /x800 /y600`. Under Linux/Proton, prepend `WINEDLLOVERRIDES="ddraw=n,b" PROTON_NO_NTSYNC=1 PROTON_NO_FSYNC=1 PROTON_NO_ESYNC=1 %command%`. Full instructions are in the README.
 

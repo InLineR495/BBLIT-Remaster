@@ -139,6 +139,9 @@ void bb_config_load(void)
     bb_cfg.dive_gate = GetPrivateProfileIntA("remaster", "dive_gate", 1, ini);
     if (bb_cfg.dive_gate < 0 || bb_cfg.dive_gate > 2)
         bb_cfg.dive_gate = 1;
+    bb_cfg.fix_sfx = GetPrivateProfileIntA("remaster", "fix_sfx", 1, ini);
+    if (bb_cfg.fix_sfx < 0 || bb_cfg.fix_sfx > 2)
+        bb_cfg.fix_sfx = 1;
     bb_cfg.part_extra = GetPrivateProfileIntA("remaster", "part_extra", 1024, ini);
     if (bb_cfg.part_extra < 0 || bb_cfg.part_extra > 8000)
         bb_cfg.part_extra = bb_cfg.part_extra < 0 ? 0 : 8000;   // PP_MAX (fog.c): сумма с ёмкостью не переполняется
@@ -263,7 +266,7 @@ void bb_config_live(void)
         { "cam_invert", &bb_cfg.cam_invert, 0, 1 }, { "cam_swap", &bb_cfg.cam_swap, 0, 1 },
         { "sneak", &bb_cfg.sneak, 0, 90 },
         { "fence", &bb_cfg.fence, 0, 1 }, { "p23", &bb_cfg.p23, 0, 1 }, { "vb_guard", &bb_cfg.vb_guard, 0, 150 }, { "hud_edges", &bb_cfg.hud_edges, 0, 1 }, { "hor_plus", &bb_cfg.hor_plus, 0, 1 }, { "hor_logic", &bb_cfg.hor_logic, 0, 1 }, { "no_quad_split", &bb_cfg.no_quad_split, 0, 1 }, { "hud_aspect", &bb_cfg.hud_aspect, 0, 400 }, { "title_logo", &bb_cfg.title_logo, 0, 100 }, { "decals", &bb_cfg.decals, 0, 1 }, { "sky_dome", &bb_cfg.sky_dome, 0, 1 }, { "shadow_act", &bb_cfg.shadow_act, 0, 100 }, { "ps1_stp", &bb_cfg.ps1_stp, 0, 1 }, { "alpha_split", &bb_cfg.alpha_split, 0, 1 }, { "uv_centroid", &bb_cfg.uv_centroid, 0, 1 }, { "uv_clamp", &bb_cfg.uv_clamp, 0, 1 }, { "half_lock", &bb_cfg.half_lock, 0, 1 }, { "spin_snap", &bb_cfg.spin_snap, 0, 1 }, { "spin_hide", &bb_cfg.spin_hide, 0, 1 }, { "ps1_light", &bb_cfg.ps1_light, 0, 30 }, { "push_r", &bb_cfg.push_r, 0, 200 }, { "log_sec", &bb_cfg.log_sec, 0, 1 },
-        { "dive_gate", &bb_cfg.dive_gate, 0, 2 },
+        { "dive_gate", &bb_cfg.dive_gate, 0, 2 }, { "fix_sfx", &bb_cfg.fix_sfx, 0, 2 },
     };
     for (unsigned k = 0; k < sizeof in_keys / sizeof in_keys[0]; k++) {   // M6: ввод на лету
         int v = GetPrivateProfileIntA("live", in_keys[k].key, -1, ini);
@@ -404,6 +407,10 @@ void bb_config_live(void)
         WritePrivateProfileStringA("live", "ptrace", "0", ini);
         bb_cfg.ptrace = pt;
         bb_log("live: ptrace=%d", pt);
+    }
+    if (GetPrivateProfileIntA("live", "snd_dump", 0, ini) == 1) {     // отладка: голоса и петли звука в лог (sfx.c)
+        WritePrivateProfileStringA("live", "snd_dump", "0", ini);
+        bb_sfx_dump();
     }
     if (GetPrivateProfileIntA("live", "ar_dump", 0, ini) == 1) {  // отладка: решения M5-AR за тик в ar_dump.txt
         extern int bb_ar_dump_req;
@@ -584,6 +591,7 @@ void bb_late_init(void)
     bb_menu_guard_init();
     bb_edges_init();
     bb_input_init();
+    bb_sfx_init();
     if (bb_cfg.probes)
         bb_probe_init();
     bb_log("LateInit: done");

@@ -59,6 +59,7 @@ This is not frame interpolation: nothing is guessed from finished images the way
 - Save slots in the main menu stay inside their panel instead of one row jumping to the screen edge.
 - Startup logos fill the whole screen with their background instead of sitting between black bars.
 - "Hey What's Up, Dock?": diving into the burrow by the floating barrels no longer throws Bugs back. The longer character draw distance had switched on the second burrow, which grabbed Bugs towards the wrong end; now it ignores the dive, as in the original.
+- Looping sounds (torch fire, fuses) no longer play forever after Bugs walks away. The original engine leaves them running at low volume until the level is reloaded; with the longer character draw distance that happened all the time. They now go quiet out of earshot and come back when Bugs returns (`fix_sfx`).
 - "Hey What's Up, Dock?": the floating platform is no longer drawn as a flat decal on the ground, the sky islands and the sun no longer clash with the ship's hull in depth (no palm tree "stuck" on the ship), Bugs' shadow falls on the floating barrel, and the helm and the drawbridge no longer pop in and out at the original radius.
 
 **Handheld PCs (Linux/Proton).** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On Windows its own scheduler handles this. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
@@ -163,6 +164,7 @@ The main settings live in `BIN\remaster.ini` and are commented there. The `[live
 | `xinput` | `[remaster]` | 1 | 0 = original gamepad handling |
 | `big_cores` | `[remaster]` | 1 | Pin the main thread to the fast cores on hybrid CPUs (Linux/Proton) |
 | `dive_gate` | `[remaster]`, `[live]` | 1 | Burrows (docks level): 1 = a burrow kept awake by `actor_dist` ignores a dive, as in the original; 0 = off; 2 = log only |
+| `fix_sfx` | `[remaster]`, `[live]` | 1 | Looping sounds out of earshot: 1 = stop and resume when Bugs returns; 2 = just stop; 0 = original (they play forever) |
 | `sky_dome` | `[remaster]`, `[live]` | 1 | The sky dome that follows the camera (docks level: islands, sun) is drawn as a backdrop; 0 = like the engine does |
 | `shadow_act` | `[remaster]`, `[live]` | 25 | Shadows that fall on characters and objects (Bugs on a barrel): % of the usual pull toward the camera, 0 = off |
 | `part_extra` | `[remaster]` | 1024 | Extra parts in the pool for distant characters (own buffer); 0 = the engine's own pool |

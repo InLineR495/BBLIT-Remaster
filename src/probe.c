@@ -485,6 +485,7 @@ static void on_frametick(int k, uint32_t *esp)
     bb_cam_log_second();
     bb_fog_log_second();
     bb_input_log_second();
+    bb_sfx_log_second();
     bb_log_mute = 0;
     bb_config_live();
     prev_clock = clock;
