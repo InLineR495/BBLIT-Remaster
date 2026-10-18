@@ -23,6 +23,29 @@ static struct {
     void (WINAPI *Clear)(GLbitfield);
 } gl;
 
+// Width of the thin raster border at one viewport edge (0 left, 1 right,
+// 2 bottom, 3 top), measured on three lines across the edge. Its thickness
+// scales with the output resolution (about 3 px at 1200 lines), so it is
+// measured rather than assumed. A line that hits artwork is ignored.
+static int edge_border(const GLint vp[4],int dir,const float rgb[3])
+{
+    int len=dir<2 ? vp[2] : vp[3],m=len/64,best=-1;
+    if(m<4) m=4;
+    if(m>32) m=32;
+    for(int k=1;k<=3;k++) {
+        unsigned char raw[32][4],px[32][4];
+        int along=(dir<2 ? vp[3] : vp[2])*k/4;
+        int x=dir<2 ? (dir==0 ? vp[0] : vp[0]+vp[2]-m) : vp[0]+along;
+        int y=dir<2 ? vp[1]+along : (dir==2 ? vp[1] : vp[1]+vp[3]-m);
+        gl.ReadPixels(x,y,dir<2 ? m : 1,dir<2 ? 1 : m,GL_RGBA,GL_UNSIGNED_BYTE,raw);
+        for(int i=0;i<m;i++)                     // index 0 = outermost pixel
+            for(int c=0;c<4;c++) px[i][c]=raw[dir==1 || dir==3 ? m-1-i : i][c];
+        int b=bb_splash_border((const unsigned char (*)[4])px,m,rgb);
+        if(b>=0 && (best<0 || b<best)) best=b;
+    }
+    return best<0 ? 0 : best;
+}
+
 void bb_splash_fill(void)
 {
     static int loaded;
@@ -55,23 +78,23 @@ void bb_splash_fill(void)
     for(int i=0;i<4;i++)
         gl.ReadPixels(vp[0]+(i&1 ? vp[2]-vp[2]/20-1 : vp[2]/20),
                       vp[1]+(i&2 ? vp[3]-vp[3]/20-1 : vp[3]/20),1,1,GL_RGBA,GL_UNSIGNED_BYTE,corners[i]);
-    gl.PopClientAttrib();
     float rgb[3];
-    if(bb_splash_color(corners,rgb)) {
+    int ok=bb_splash_color(corners,rgb),bd[4]={0};
+    if(ok)
+        for(int i=0;i<4;i++) bd[i]=edge_border(vp,i,rgb);
+    gl.PopClientAttrib();
+    if(ok) {
         gl.Enable(GL_SCISSOR_TEST); gl.ColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
         gl.ClearColor(rgb[0],rgb[1],rgb[2],1);
-        // Cover the thin raster seam just inside a padded image edge. Do not
-        // touch unpadded edges or resize the artwork; overlap is only 2 pixels.
-        const int seam=2;
-        int right=cw-vp[0]-vp[2],top=ch-vp[1]-vp[3];
-        const int bars[4][4]={{0,0,vp[0]>0 ? vp[0]+seam : 0,ch},
-            {vp[0]+vp[2]-seam,0,right>0 ? right+seam : 0,ch},
-            {vp[0],0,vp[2],vp[1]>0 ? vp[1]+seam : 0},
-            {vp[0],vp[1]+vp[3]-seam,vp[2],top>0 ? top+seam : 0}};
+        // Bars plus the measured raster border on each edge, also where the
+        // image touches the window edge. The artwork itself is not resized.
+        int x0=vp[0]+bd[0],x1=vp[0]+vp[2]-bd[1],y0=vp[1]+bd[2],y1=vp[1]+vp[3]-bd[3];
+        const int bars[4][4]={{0,0,x0,ch},{x1,0,cw-x1,ch},{vp[0],0,vp[2],y0},{vp[0],y1,vp[2],ch-y1}};
         for(int i=0;i<4;i++) if(bars[i][2]>0 && bars[i][3]>0) {
             gl.Scissor(bars[i][0],bars[i][1],bars[i][2],bars[i][3]); gl.Clear(GL_COLOR_BUFFER_BIT);
         }
-        if(reported++<8) bb_log("splash: bars RGB %.3f/%.3f/%.3f, viewport %d,%d %dx%d",rgb[0],rgb[1],rgb[2],vp[0],vp[1],vp[2],vp[3]);
+        if(reported++<8) bb_log("splash: bars RGB %.3f/%.3f/%.3f, viewport %d,%d %dx%d, border L%d R%d B%d T%d",
+                                rgb[0],rgb[1],rgb[2],vp[0],vp[1],vp[2],vp[3],bd[0],bd[1],bd[2],bd[3]);
     } else if(reported++<8) {
         bb_log("splash: nonuniform samples %u/%u/%u/%u viewport %d,%d %dx%d draw=%x",corners[0][0],corners[1][0],corners[2][0],corners[3][0],vp[0],vp[1],vp[2],vp[3],draw);
     }
