@@ -24,6 +24,13 @@ jobs:
       - name: Build ddraw.dll
         run: ./build.sh
 
+      - name: Test UI layout and splash colour policies
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror tools/test_hud_policy.c -o build/test_hud_policy
+          ./build/test_hud_policy
+          gcc -std=c11 -Wall -Wextra -Werror tools/test_splash_policy.c -o build/test_splash_policy
+          ./build/test_splash_policy
+
       - name: Package
         run: |
           VER=$(sed -n 's/^#define BB_VERSION "\(.*\)"/\1/p' src/remaster.h)

@@ -4,6 +4,7 @@
 #pragma once
 
 #define BB_IMAGE_BASE        0x400000u
+#define BB_HOST_NAME         "bugs.exe 1.6"
 #define BB_VERSION_ADDR      0x45ca00u
 #define BB_VERSION_1_6       0x3fe5555555555555ull
 #define BB_TEXT_VA           0x401000u

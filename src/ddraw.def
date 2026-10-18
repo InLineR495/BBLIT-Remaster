@@ -2,3 +2,8 @@ LIBRARY ddraw.dll
 EXPORTS
     DirectDrawCreate = proxy_DirectDrawCreate@12
     DirectDrawEnumerateA = proxy_DirectDrawEnumerateA@8
+    AcquireDDThreadLock = proxy_AcquireDDThreadLock
+    ReleaseDDThreadLock = proxy_ReleaseDDThreadLock
+    DDInternalLock = proxy_DDInternalLock
+    DDInternalUnlock = proxy_DDInternalUnlock
+    D3DParseUnknownCommand = proxy_D3DParseUnknownCommand

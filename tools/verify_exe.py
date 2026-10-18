@@ -2,6 +2,7 @@
 """Сверка addr.h с эталонным bugs.exe: байты BB_SITE, слоты BB_IAT, CRC32 .text и маркер версии.
 Запуск: python3 -I tools/verify_exe.py [путь к bugs.exe] (по умолчанию ../orig/bugs.exe)."""
 import pathlib
+import hashlib
 import re
 import struct
 import sys
@@ -11,12 +12,21 @@ here = pathlib.Path(__file__).resolve().parent.parent
 exe = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else here.parent / 'orig' / 'bugs.exe'
 addr_h = (here / 'src' / 'addr.h').read_text(encoding='utf-8')
 d = exe.read_bytes()
+print(f'File size: {len(d)} bytes')
+print(f'SHA-256: {hashlib.sha256(d).hexdigest()}')
 
 pe = struct.unpack_from('<I', d, 0x3c)[0]
 nsec = struct.unpack_from('<H', d, pe + 6)[0]
 optsz = struct.unpack_from('<H', d, pe + 20)[0]
 base = struct.unpack_from('<I', d, pe + 24 + 28)[0]
 secs = [struct.unpack_from('<IIII', d, pe + 24 + optsz + 40 * i + 8) for i in range(nsec)]
+entry = base + struct.unpack_from('<I', d, pe + 24 + 16)[0]
+print(f'Image base: {base:#010x}; entry point: {entry:#010x}')
+for i, (vs, rva, rs, ra) in enumerate(secs):
+    name = d[pe + 24 + optsz + 40 * i:pe + 24 + optsz + 40 * i + 8].rstrip(b'\0')
+    if name == b'.text':
+        print(f'Actual .text: VA={base + rva:#010x}, raw size={rs:#x}, '
+              f'CRC32={zlib.crc32(d[ra:ra + rs]):#010x}')
 
 
 def off(va):
@@ -74,5 +84,5 @@ for name, va, dll, fn in re.findall(r'I\((\w+),\s*(0x[0-9a-fA-F]+),\s*"([^"]+)",
     bad += not ok
     print(('ok  ' if ok else 'FAIL') + f' iat {name} {va}: {dll}!{fn} -> {slot and hex(slot)}')
 
-print('ИТОГ:', 'всё сходится' if not bad else f'{bad} расхождений')
+print('RESULT:', 'all checks passed' if not bad else f'{bad} mismatches (unsupported executable; no files modified)')
 sys.exit(1 if bad else 0)

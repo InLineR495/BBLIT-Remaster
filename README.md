@@ -76,6 +76,42 @@ This is not frame interpolation: nothing is guessed from finished images the way
 
 ## Installation
 
+### Reporting an unsupported executable
+
+When requesting support for another edition, attach `BIN/remaster.log` and
+include the game's language and the output of this read-only check from a
+source checkout (Python 3, no extra packages):
+
+```sh
+python -I tools/verify_exe.py "/path/to/BIN/bugs.exe"
+```
+
+The output includes the file's SHA-256, actual `.text` CRC32, entry point,
+and comparisons of all hook sites and import slots. Exit status 1 means the
+executable does not match the supported layout. The summary also works in
+Windows consoles that cannot print Cyrillic. Do not bypass the version or
+CRC checks: a different layout needs its own verified addresses, including
+the hardcoded addresses outside `addr.h`. See the [Spanish edition report](docs/spanish-executable.md)
+for one such layout and an experimental, separately built profile. See
+[porting other editions](docs/porting-editions.md) for the address-verification
+workflow; this does not imply support for untested executables or all languages.
+
+### Experimental Spanish-installation profile
+
+For the exact SHA-256 documented in the report, build a separate DLL with:
+
+```sh
+python tools/build_spanish.py "/path/to/BIN/bugs.exe"
+```
+
+This requires Python 3 and i686 MinGW-w64. On MSYS2, use
+`--cc C:/msys64/mingw32/bin/gcc.exe` if the prefixed compiler name is unavailable.
+Copy `build/spanish/ddraw.dll` and `dist/remaster.ini` into `BIN` and use the
+launch arguments below. The tool verifies the exact file hash and all hook
+sites/import slots before compiling. It never modifies or bundles `bugs.exe`.
+Keep the original DLL as a backup. This profile has limited Windows testing;
+it is not part of the default release build.
+
 Download `BBLIT-Remaster-1.0-beta.zip` from [Releases](../../releases) and extract it into the game folder. `ddraw.dll` and `remaster.ini` must end up in the `BIN` folder, next to `bugs.exe`.
 
 Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these arguments: `/opengl /win /b0 /x800 /y600`.
@@ -107,10 +143,22 @@ Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these ar
    "C:\...\Bugs Bunny\BIN\bugs.exe" /opengl /win /b0 /x800 /y600
    ```
 3. Always start the game through this shortcut. The launcher doesn't pass `/opengl /win`.
+   Set the shortcut's **Start in** directory to the game's `BIN` directory;
+   the engine opens assets through relative paths. Opening `bugs.exe` without
+   the arguments can also enter startup paths requiring resources absent from
+   some distributions (such as `LANGUAGE.BZE`). Do not rename another BZE file
+   to fill that role.
 4. Turn vertical sync on for `bugs.exe` in your driver control panel (NVIDIA: Vertical sync → On; AMD: Wait for Vertical Refresh → Always On). The mod paces its frames to vsync.
 5. With display scaling above 100 %, the mod switches the game to DPI-aware mode, so it renders at full resolution.
 
 ### Checking that it works
+
+Startup logos with a uniform background can extend that background into the
+side bars without stretching their artwork (`splash_fill=1`, enabled by default).
+The colour is sampled slightly inside the displayed image, avoiding its thin
+black raster border; a two-pixel overlap covers the remaining edge seam.
+Nonuniform corner colours retain the original bars.
+Set `splash_fill=0` in `[remaster]` to retain the original presentation.
 
 After launch, `remaster.log` appears in `BIN`, and its first lines contain `BBLIT Remaster 1.0-beta`. The picture fills the whole wide screen, and the right stick turns the camera.
 
