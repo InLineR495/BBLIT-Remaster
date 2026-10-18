@@ -131,6 +131,7 @@ void bb_config_load(void)
     bb_cfg.draw_dist = GetPrivateProfileIntA("remaster", "draw_dist", 200, ini);
     bb_cfg.fog_start = GetPrivateProfileIntA("remaster", "fog_start", 75, ini);
     bb_cfg.actor_dist = GetPrivateProfileIntA("remaster", "actor_dist", 400, ini);
+    bb_cfg.part_extra = GetPrivateProfileIntA("remaster", "part_extra", 1024, ini);
     bb_cfg.fade_in = GetPrivateProfileIntA("remaster", "fade_in", 1, ini);
     bb_cfg.haze = GetPrivateProfileIntA("remaster", "haze", 0, ini);
     bb_cfg.haze_depth = GetPrivateProfileIntA("remaster", "haze_depth", -800, ini);
@@ -331,6 +332,12 @@ void bb_config_live(void)
     if (ip >= 0 && ip != bb_cfg.interp) {
         bb_cfg.interp = ip;
         bb_log("live: интерполяция %s", ip ? "ВКЛ (частота экрана)" : "ВЫКЛ (30 кадров)");
+    }
+    int dtx = GetPrivateProfileIntA("live", "dump_tex", 0, ini);
+    if (dtx > 0) {
+        extern int bb_dump_tex;
+        WritePrivateProfileStringA("live", "dump_tex", "0", ini);
+        bb_dump_tex = dtx;
     }
     int cap = GetPrivateProfileIntA("live", "cap", 0, ini);
     if (cap > 0) {                  // отладка: запись cap кадров (cap_lvl — начать на уровне, cap_div — уменьшение)

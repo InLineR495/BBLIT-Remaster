@@ -60,6 +60,7 @@ static uint32_t sec_ticks, sec_pacer, sec_gate;
 static uint64_t sec_draw_us_sum;
 static uint32_t prev_clock, prev_builds, prev_skips;
 static uint32_t lvl_index, prev_stamp;
+uint32_t bb_level_loads(void) { return lvl_index; }   // счётчик загрузок уровня (LVL #)
 static int gl_logged;
 
 uint32_t bb_last_pool, bb_last_arena, bb_last_nsort;   // M5b: ёмкость прошлого построения (страховка дальности)

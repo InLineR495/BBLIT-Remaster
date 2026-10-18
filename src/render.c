@@ -2325,7 +2325,9 @@ static void gpu_cmd_add(int list, uint32_t first, uint32_t n, uint16_t state, in
 // дальние комнаты, их тени), проявляется дизерингом за FADE_TICKS тиков, а не «выскакивает». Ближние появления
 // (выстрелы, эффекты) — сразу. M4e: только если объект был бы виден камерой A (поза B при камере A в кадре): въехавшие
 // из-за края при повороте и появившиеся при смене ракурса — сразу (сеткой проявлялись кромка и весь новый вид).
+// Первые FADE_GRACE тиков уровня — без проявления: мир собирается сразу (раньше 2–3 с всё проявлялось из пустоты).
 #define FADE_TICKS 8
+#define FADE_GRACE 45
 #define FADE_W 2000.0f
 #define FD_BITS 13
 static struct fd_obj { uint32_t obj, last, first; uint8_t distant, inview; } fd_tab[1 << FD_BITS];
@@ -2365,6 +2367,12 @@ static void fd_scan(const struct bb_snapshot *a, const struct bb_snapshot *b)
         if (is_world(&b->verts[b->prims[i].first]))
             wo = b->states[b->prims[i].state].ortho;
     int test = a && !cam_cut && wo;
+    static uint32_t fd_level = ~0u, fd_level_build;
+    if (b->level_gen != fd_level) {
+        fd_level = b->level_gen;
+        fd_level_build = b->build_id;
+    }
+    int grace = b->build_id < fd_level_build + FADE_GRACE;
     if (fd_used > (1u << FD_BITS) / 2) {            // переполнение (новые адреса) — живые за два тика оставить
         static struct fd_obj old[1 << FD_BITS];
         memcpy(old, fd_tab, sizeof old);
@@ -2382,7 +2390,7 @@ static void fd_scan(const struct bb_snapshot *a, const struct bb_snapshot *b)
         if (o->last != b->build_id) {               // первая вершина объекта в этом тике
             if (o->last + 1 < b->build_id) {        // в прошлом тике не было — появился
                 o->first = b->build_id;
-                o->distant = o->last != 0 || b->build_id > 2;
+                o->distant = !grace && (o->last != 0 || b->build_id > 2);
                 o->inview = !test && !(a && wo && cam_cut);   // без камеры A — как раньше; смена ракурса — сразу
                 fd_sec += o->distant;
             }
@@ -2834,8 +2842,32 @@ static void pu_shift(const float *in, const struct bb_snapshot *s, const double 
         memcpy(out, in, 3 * sizeof *out);
 }
 
+// отладка: [live] dump_tex=N — один раз в лог вершины примитивов с текстурой N из текущего снимка (цвет уже с туманом
+// и затуханием движка: чёрный rgba — затемнил сам движок)
+int bb_dump_tex;
+static void dump_tex(const struct bb_snapshot *b)
+{
+    int n = 0;
+    for (uint32_t i = 0; i < b->nprims && n < 24; i++) {
+        const struct bb_prim *p = &b->prims[i];
+        const struct bb_state *st = &b->states[p->state];
+        if (!(st->caps & BB_CAP_TEXTURE) || (int)st->tex != bb_dump_tex)
+            continue;
+        for (unsigned k = 0; k < p->nverts && n < 24; k++, n++) {
+            const struct bb_vert *v = &b->verts[p->first + k];
+            bb_log("dump_tex %d: prim %u obj %08x tag %u fl %u xyz %.1f %.1f %.1f uv %.3f %.3f rgba %08x caps %#x", bb_dump_tex,
+                   i, v->obj, v->tag, v->fl, v->x, v->y, v->z, v->u, v->v, v->rgba, st->caps);
+        }
+    }
+    if (!n)
+        bb_log("dump_tex %d: в снимке нет", bb_dump_tex);
+    bb_dump_tex = 0;
+}
+
 static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
 {
+    if (bb_dump_tex > 0)
+        dump_tex(b);
     static int hud_was = -1;
     static int hud_gameplay_was = -1;
     int gameplay = hud_gameplay();

@@ -37,10 +37,12 @@ static uint32_t calls, calls_over;
 // за тик ≤ AR_NEW_MAX и только при запасе AR_RESERVE (оценка AR_EST частей на актора); включённые дальние держатся,
 // пока свободных ≥ AR_HARD. Таймер сна +0x24 = (dist − edx) >> 7 у движка считается от того же предела — согласован.
 #define AR_NEW_MAX 3
+#define AR_NEW_BURST 64         // первые AR_BURST_TICKS после загрузки уровня: мир сразу, а не по 3 за тик (~3 с)
+#define AR_BURST_TICKS 45
 #define AR_EST 32
 #define AR_RESERVE 200          // новый дальний — только если после него останется ≥ 200 свободных
 #define AR_HARD 160             // свободных < 160 — дальние сбрасываются: оригиналу всегда остаётся его запас
-static int ar_q8 = 256, ar_free, ar_new;
+static int ar_q8 = 256, ar_free, ar_new, ar_drops, ar_burst;
 static uint32_t ar_tick = 2;
 // кто был включён в прошлом тике (бит +4 & 2 не годится: 0x447d40 ставит его всем перед проверкой дистанции)
 #define AR_BITS 11
@@ -77,6 +79,8 @@ static uint8_t *ar_stub;
 static int room_drawn(uint32_t actor)
 {
     int16_t room = *(volatile int16_t *)(uintptr_t)(actor + 0x26);
+    if (room < 0)               // актор без комнаты (глобальный): штурвал, мост L03A — раньше всегда «не рисуется», 2026-10-18
+        return 1;
     int n = *(volatile int16_t *)(uintptr_t)0x4b39dcu;
     if (n > 24)
         n = 24;
@@ -163,8 +167,19 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
             ar_dump_line(actor, dist, r, lim, 1, AR_ROOM_LOST + 1, "сброшен: комната не рисуется");
             return r;
         }
+        // Мало частей: выключенный актор свои части не отдаёт (кроме флага +8 & 0x1000, см. ниже) — сброс такого пулу не
+        // поможет, а только погасит объект. Раньше за тик сбрасывались все дальние разом (L03A: 67 за тик), и мир
+        // мигал: гасли и по 3 за тик проявлялись снова (2026-10-18). Теперь — только отдающие части, по одному за тик.
         if (ar_free < AR_HARD) {
+            if (!(RD32(actor + 8) & 0x1000) || ar_drops >= 1) {
+                ar_far_now++;
+                ar_dump_line(actor, dist, r, lim, 1, (int)e->lost, "держится (частей мало, сброс не поможет)");
+                return lim;
+            }
             *t = 0;
+            ar_drops++;
+            for (uint32_t p = RD32(actor + 0x78), n = 0; p && n < 64; p = RD32(p), n++)
+                ar_free++;                                  // эти части вернутся в пул
             ar_dropped_sec++;
             ar_dump_line(actor, dist, r, lim, 1, (int)e->lost, "сброшен: мало частей");
             return r;
@@ -178,10 +193,11 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
     // держатся включённые (раньше «оценка 32 части» отказывала динозавру L01A после возврата, 2026-10-16).
     int est = *(volatile uint32_t *)(uintptr_t)(actor + 0x78) ? 0 : AR_EST;
     int poor = est ? ar_free - est < AR_RESERVE : ar_free < AR_HARD;
-    if (ar_new >= AR_NEW_MAX || poor || !room_drawn(actor)) {
+    int new_max = ar_burst ? AR_NEW_BURST : AR_NEW_MAX;
+    if (ar_new >= new_max || poor || !room_drawn(actor)) {
         *t = 0;
         ar_denied_sec++;
-        ar_dump_line(actor, dist, r, lim, 0, (int)e->lost, ar_new >= AR_NEW_MAX ? "отказ: лимит новых в тике" :
+        ar_dump_line(actor, dist, r, lim, 0, (int)e->lost, ar_new >= new_max ? "отказ: лимит новых в тике" :
                      poor ? "отказ: запас частей" : "отказ: комната не рисуется");
         return r;
     }
@@ -199,20 +215,79 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
 }
 
 // C1 (раз в тик, до следующего ActorManager): защёлкнуть множитель, пересчитать свободные части
+static void pp_keep(void);
+
 static void ar_build_begin(void)
 {
+    pp_keep();
     int cap, used = bb_part_pool_used(&cap);
     ar_q8 = bb_cfg.actor_dist > 100 && bb_cfg.actor_dist <= 400 && ar_stub ? bb_cfg.actor_dist * 256 / 100 : 256;
     ar_free = cap ? cap - used : 0;
     ar_free_min = ar_free < ar_free_min ? ar_free : ar_free_min;
     ar_new = 0;
+    ar_drops = 0;
+    static uint32_t seen_loads;
+    if (bb_level_loads() != seen_loads) {       // загрузка уровня: дальние включаются пачкой
+        seen_loads = bb_level_loads();
+        ar_burst = AR_BURST_TICKS;
+    } else if (ar_burst) {
+        ar_burst--;
+    }
     ar_tick++;
     ar_far_max = ar_far_now > ar_far_max ? ar_far_now : ar_far_max;
     ar_far_now = 0;
 }
 
+// --- M5-AR: пул частей побольше ---
+// Пул частей (база [0x4b2240], ёмкость word [0x4b2244] = число из заголовка уровня + 100) выкраивается в 4 МБ
+// «PSX RAM» вплотную к другим пулам и данным уровня. Дальние акторы (×4) съедают этот запас: в L03A на тик держалось
+// 330+ дальних, свободных частей ~175 — новые получали отказ, объекты не появлялись (штурвал за сундуками, 2026-10-18).
+// Перед инициализацией пула (0x430964, следом 0x448890 чистит его) база подменяется своим буфером, ёмкость
+// увеличивается на part_extra. Следующие пулы движок уже посчитал от старой базы — раскладка уровня не меняется.
+// Аллокатор (0x448980/0x4489f0) ищет свободную часть линейно по базе и ёмкости, исчерпание — jmp $.
+// Уровни, загружаемые из меню (L03A), пулы заново не выкраивают: движок только переписывает ёмкость числом из
+// заголовка (0x42f900), база остаётся нашей — запас возвращает pp_keep() раз в тик (недостающие слоты — свободными,
+// как 0x448890: часть обнулена, [+4] = 1).
+#define PP_MAX 8000
+static uint8_t *pp_buf;
+static int pp_cap, pp_inited;   // ёмкость, которую поставили мы, и сколько слотов буфера уже готовы
+
+static void on_part_pool(uint32_t *esp)
+{
+    (void)esp;
+    int cap = *(volatile int16_t *)(uintptr_t)0x4b2244u;
+    if (bb_cfg.part_extra <= 0 || cap <= 0)
+        return;
+    if (!pp_buf && !(pp_buf = VirtualAlloc(NULL, (size_t)PP_MAX * 0xb8, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)))
+        return;
+    int ncap = cap + bb_cfg.part_extra > PP_MAX ? PP_MAX : cap + bb_cfg.part_extra;
+    *(volatile uint32_t *)(uintptr_t)0x4b2240u = (uint32_t)(uintptr_t)pp_buf;
+    *(volatile int16_t *)(uintptr_t)0x4b2244u = (int16_t)ncap;
+    pp_cap = pp_inited = ncap;                      // следом 0x448890 готовит все ncap слотов
+    bb_log("M5-AR: пул частей %d -> %d (свой буфер %p)", cap, ncap, (void *)pp_buf);
+}
+
+static void pp_keep(void)
+{
+    if (!pp_buf || bb_cfg.part_extra <= 0 || RD32(0x4b2240u) != (uint32_t)(uintptr_t)pp_buf)
+        return;
+    int cap = *(volatile int16_t *)(uintptr_t)0x4b2244u;
+    if (cap <= 0 || cap == pp_cap)
+        return;
+    int ncap = cap + bb_cfg.part_extra > PP_MAX ? PP_MAX : cap + bb_cfg.part_extra;
+    for (; pp_inited < ncap; pp_inited++) {
+        memset(pp_buf + (size_t)pp_inited * 0xb8, 0, 0xb8);
+        *(uint32_t *)(pp_buf + (size_t)pp_inited * 0xb8 + 4) = 1;
+    }
+    *(volatile int16_t *)(uintptr_t)0x4b2244u = (int16_t)ncap;
+    pp_cap = ncap;
+    bb_log("M5-AR: движок переписал ёмкость пула частей (%d) — снова %d", cap, ncap);
+}
+
 static void ar_init(void)
 {
+    if (bb_cfg.part_extra > 0 && bb_detour_pre(BB_SITE_PARTPOOL, on_part_pool))
+        bb_log("M5-AR: пул частей уровня — свой буфер, +%d частей", bb_cfg.part_extra);
     if (!bb_site_check(BB_SITE_AR_CMP)) {
         bb_log("M5-AR: сайт 0x447f3a не совпал — дистанция акторов как в оригинале");
         return;
