@@ -48,6 +48,14 @@
 #define GL_FRAMEBUFFER_COMPLETE 0x8cd5
 #define GL_RGBA8 0x8058
 #define GL_DEPTH_COMPONENT32F 0x8cac
+#define GL_DEPTH32F_STENCIL8 0x8cad
+#define GL_DEPTH_STENCIL_ATTACHMENT 0x821a
+#define GL_STENCIL_TEST 0x0b90
+#define GL_STENCIL_BUFFER_BIT 0x0400
+#define GL_ALWAYS 0x0207
+#define GL_EQUAL 0x0202
+#define GL_KEEP 0x1e00
+#define GL_REPLACE 0x1e01
 #define GL_NEAREST 0x2600
 #define GL_MULTISAMPLE 0x809d
 #define GL_CONTEXT_PROFILE_MASK 0x9126
@@ -78,6 +86,9 @@ static struct {
     void (WINAPI *DepthFunc)(unsigned);
     void (WINAPI *DepthMask)(unsigned char);
     void (WINAPI *PolygonOffset)(float, float);
+    void (WINAPI *StencilFunc)(unsigned, int, unsigned);
+    void (WINAPI *StencilOp)(unsigned, unsigned, unsigned);
+    void (WINAPI *StencilMask)(unsigned);
     void (WINAPI *ShadeModel)(unsigned);
     void (WINAPI *MatrixMode)(unsigned);
     void (WINAPI *LoadIdentity)(void);
@@ -120,6 +131,7 @@ static unsigned eng_fbo, eng_fbo_rb;   // FBO-объект в контексте
 static HGLRC eng_fbo_ctx;
 static void (WINAPI *gl_Finish)(void);
 static int fb_w, fb_h, fb_samples, failed;
+static int fb_stencil;              // у глубины FBO есть трафарет (тени на акторах, gpu_pass)
 static uint32_t frames, last_logged_prims;
 
 static int load_core(void)
@@ -134,6 +146,7 @@ static int load_core(void)
     L(Color4ub, "glColor4ub"); L(TexCoord2f, "glTexCoord2f"); L(Enable, "glEnable"); L(Disable, "glDisable");
     L(BindTexture, "glBindTexture"); L(BlendFunc, "glBlendFunc"); L(AlphaFunc, "glAlphaFunc");
     L(DepthFunc, "glDepthFunc"); L(DepthMask, "glDepthMask"); L(PolygonOffset, "glPolygonOffset"); L(ShadeModel, "glShadeModel");
+    L(StencilFunc, "glStencilFunc"); L(StencilOp, "glStencilOp"); L(StencilMask, "glStencilMask");
     L(MatrixMode, "glMatrixMode"); L(LoadIdentity, "glLoadIdentity"); L(Ortho, "glOrtho"); L(Viewport, "glViewport");
     L(Clear, "glClear"); L(ClearColor, "glClearColor"); L(ClearDepth, "glClearDepth"); L(GetIntegerv, "glGetIntegerv");
     L(GetString, "glGetString"); L(GetError, "glGetError"); L(ReadPixels, "glReadPixels"); L(PixelStorei, "glPixelStorei");
@@ -262,12 +275,21 @@ static int ensure_fbo(int w, int h)
     gl.RenderbufferStorageMultisample(GL_RENDERBUFFER, fb_samples, GL_RGBA8, w, h);
     gl.GenRenderbuffers(1, &rb_depth);
     gl.BindRenderbuffer(GL_RENDERBUFFER, rb_depth);
-    gl.RenderbufferStorageMultisample(GL_RENDERBUFFER, fb_samples, GL_DEPTH_COMPONENT32F, w, h);
+    // глубина 32F как была, плюс 8 бит трафарета: пиксели акторов для теней поверх них; без него — прежний формат
+    gl.RenderbufferStorageMultisample(GL_RENDERBUFFER, fb_samples, GL_DEPTH32F_STENCIL8, w, h);
     gl.GenFramebuffers(1, &fbo);
     gl.BindFramebuffer(GL_FRAMEBUFFER, fbo);
     gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb_color);
-    gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb_depth);
+    gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb_depth);
     unsigned status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER);
+    fb_stencil = status == GL_FRAMEBUFFER_COMPLETE && gl.StencilFunc && gl.StencilOp && gl.StencilMask;
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+        gl.BindRenderbuffer(GL_RENDERBUFFER, rb_depth);
+        gl.RenderbufferStorageMultisample(GL_RENDERBUFFER, fb_samples, GL_DEPTH_COMPONENT32F, w, h);
+        gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb_depth);
+        status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER);
+    }
     // разрешение MSAA — в одиночный RGBA8 (форматы при MSAA-blit должны совпадать, а у окна RGB8), потом в окно
     gl.GenRenderbuffers(1, &rb_resolve);
     gl.BindRenderbuffer(GL_RENDERBUFFER, rb_resolve);
@@ -276,7 +298,8 @@ static int ensure_fbo(int w, int h)
     gl.BindFramebuffer(GL_FRAMEBUFFER, fbo_resolve);
     gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb_resolve);
     unsigned status2 = gl.CheckFramebufferStatus(GL_FRAMEBUFFER);
-    bb_log("M3: FBO %ux%u MSAA %d× -> %#x, resolve -> %#x", w, h, fb_samples, status, status2);
+    bb_log("M3: FBO %ux%u MSAA %d× -> %#x, resolve -> %#x, трафарет %s", w, h, fb_samples, status, status2,
+           fb_stencil ? "есть" : "нет");
     if (status != GL_FRAMEBUFFER_COMPLETE || status2 != GL_FRAMEBUFFER_COMPLETE)
         return 0;
     fb_w = w;
@@ -1784,7 +1807,7 @@ static const char *const gpu_vs =
     "layout(location = 7) in float a_fade;\n"       // M5b: проявление объекта на α = 0 (≥ 1 — виден целиком)
     "layout(location = 8) in vec2 a_hw;\n"          // M5b: высота в мире (вверх = −Y) в A и B — для дымки
     "uniform int u_bgpass;\n"
-    "uniform float u_alpha, u_xs_world, u_xs_bb, u_fadek;\n"
+    "uniform float u_alpha, u_xs_world, u_xs_bb, u_fadek, u_szk;\n"
     "uniform int u_fogs;\n"
     "out vec2 v_uv;\n"
     "centroid out vec2 v_uvc;\n"                   // то же в точке внутри треугольника (MSAA, см. фрагментный)
@@ -1825,7 +1848,7 @@ static const char *const gpu_vs =
     "        float d = dv(z), w = -z;\n"
     "        v_w = w;\n"
     "        n.x *= a_flags.x > 0.5 ? u_xs_bb : u_xs_world;\n"
-    "        float wz = (fw & 2) != 0 ? max(w - a_sz.x, ZN * 1.01) : w;\n"   // тень: глубина ближе на δ (a_sz.x), экран тот же
+    "        float wz = (fw & 2) != 0 ? max(w - a_sz.x * u_szk, ZN * 1.01) : w;\n"   // тень: глубина ближе на δ (a_sz.x), экран тот же
     "        gl_Position = vec4(n * d, w * ((ZF + ZN) / (ZF - ZN) - 2.0 * ZF * ZN / ((ZF - ZN) * wz)), w);\n"
     // «резкий» туман — как emit_world, в целых: только у дальних вершин мира, не у билбордов
     "        if (c.a < 1.0 && a_flags.x < 0.5 && u_fogs > 10 && z < -8000.0) {\n"
@@ -2110,7 +2133,7 @@ static int prim_list(const struct bb_snapshot *b, const struct bb_prim *p)
 static unsigned gprog, gvao, gvbo, gibo, gpu_gen, gpu_trans_mode;
 static int gpu_state;               // 0 — не создан, 1 — готов, −1 — отказ (до нового контекста)
 static int u_bgpass, u_ci, u_vp, u_scr, u_hz, u_hzTop, u_hzThick, u_hzNear, u_hzFar, u_hzMax, u_hzA0, u_hzA1, u_hzCol;
-static int u_fadek, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp, u_light, u_akill, u_centroid, u_clampuv;
+static int u_fadek, u_szk, u_alpha, u_xs_world, u_xs_bb, u_fogs, u_tex, u_flat, u_afunc, u_abr, u_aref, u_gain, u_fogD, u_fogS, u_fadd, u_stp, u_light, u_akill, u_centroid, u_clampuv;
 
 static unsigned gpu_shader(unsigned type, const char *src)
 {
@@ -2173,7 +2196,7 @@ static int gpu_init(void)
     }
 #define U(v) (v = gx.GetUniformLocation(gprog, #v))
     U(u_alpha); U(u_xs_world); U(u_xs_bb); U(u_fogs); U(u_tex); U(u_flat); U(u_afunc); U(u_abr); U(u_aref); U(u_gain); U(u_stp); U(u_light); U(u_akill); U(u_centroid); U(u_clampuv);
-    U(u_fogD); U(u_fogS); U(u_fadd); U(u_fadek);
+    U(u_fogD); U(u_fogS); U(u_fadd); U(u_fadek); U(u_szk);
     U(u_bgpass); U(u_ci); U(u_vp); U(u_scr); U(u_hz); U(u_hzTop); U(u_hzThick); U(u_hzNear); U(u_hzFar);
     U(u_hzMax); U(u_hzA0); U(u_hzA1); U(u_hzCol);
 #undef U
@@ -3026,6 +3049,8 @@ static void gpu_upload(const struct bb_snapshot *a, const struct bb_snapshot *b)
     gx.BufferData(GL_ELEMENT_ARRAY_BUFFER, (ptrdiff_t)(ntotal + nig) * 4, gidx, GL_STREAM_DRAW);
 }
 
+static int st_mark;                 // gpu_pass пишет трафарет 1 под непрозрачным (список 1)
+
 static void gpu_pass(const struct bb_snapshot *s, int list, const int vp43[4], const int vpwide[4])
 {
     int world = list != 0;
@@ -3039,6 +3064,8 @@ static void gpu_pass(const struct bb_snapshot *s, int list, const int vp43[4], c
         int abr = bb_cfg.ps1_blend ? c->abr : -1;
         if (c->trans != trans_now) {
             gl.DepthMask(c->trans ? 0 : 1);
+            if (st_mark)
+                gl.StencilMask(c->trans ? 0 : 0xff);    // метка «непрозрачный актор» — тени поверх (после списка 1)
             if (c->trans) {
                 gl.Enable(GL_POLYGON_OFFSET_FILL);
                 gl.PolygonOffset(-1.0f, -4.0f);
@@ -3108,9 +3135,13 @@ static void gpu_pass(const struct bb_snapshot *s, int list, const int vp43[4], c
             gx.Uniform1f(u_akill, 0.5f);
             gx.DrawElements(GL_TRIANGLES, (int)c->count, GL_UNSIGNED_INT, (void *)(uintptr_t)(c->first * 4));
             gl.DepthMask(0);
+            if (st_mark)
+                gl.StencilMask(0);              // кайма без глубины — не «непрозрачный актор»
             gx.Uniform1f(u_akill, -0.5f);
             gx.DrawElements(GL_TRIANGLES, (int)c->count, GL_UNSIGNED_INT, (void *)(uintptr_t)(c->first * 4));
             gl.DepthMask(1);
+            if (st_mark)
+                gl.StencilMask(0xff);
             gx.Uniform1f(u_akill, 0.0f);
             continue;
         }
@@ -3810,7 +3841,9 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
     gl.DepthMask(1);
     gl.ClearColor(0, 0, 0, 1);
     gl.ClearDepth(1.0);
-    gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (fb_stencil)
+        gl.StencilMask(0xff);
+    gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | (fb_stencil ? GL_STENCIL_BUFFER_BIT : 0));
     gl.Enable(GL_MULTISAMPLE);
 
     // 4:3 на всю высоту окна; мир при Hor+ — на весь экран (vFOV тот же), экран/HUD — в центре 4:3
@@ -3870,6 +3903,7 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
         gx.Uniform1f(u_light, bb_cfg.ps1_light / 10.0f);
         gx.Uniform1i(u_centroid, bb_cfg.uv_centroid);
         gx.Uniform1f(u_fadek, 1.0f / FADE_TICKS);
+        gx.Uniform1f(u_szk, 1.0f);
         gx.Uniform1f(u_fogD, 0.0f);
         gx.Uniform1f(u_fogS, (float)(bb_cfg.fog_start / 100.0));
         gpu_pass(s, 2, vp43, vpwide);
@@ -3887,7 +3921,28 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
         gpu_pass(s, 3, vp43, vpwide);
         gpu_pass(s, 5, vp43, vpwide);
         gpu_pass(s, 4, vp43, vpwide);
+        // Тени и наклейки (список 4) рисуются до акторов, глубина подтянута к камере — на земле не мигают, ноги их
+        // закрывают. Тень на акторе (Багз на плавучей бочке L03A) актор закрывал целиком; у движка она на крышке
+        // есть. Пиксели непрозрачного в списке 1 метятся трафаретом, по ним тени — ещё раз, с малой подтяжкой и
+        // тестом глубины: на крышке бочки видна, ступни перед ней, на земле не удваивается.
+        int late = fb_stencil && gncmd[4] && bb_cfg.shadow_act > 0;
+        if (late) {
+            gl.Enable(GL_STENCIL_TEST);
+            gl.StencilFunc(GL_ALWAYS, 1, 0xff);
+            gl.StencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+            st_mark = 1;
+        }
         gpu_pass(s, 1, vp43, vpwide);
+        if (late) {
+            st_mark = 0;
+            gl.StencilMask(0);
+            gl.StencilFunc(GL_EQUAL, 1, 0xff);
+            gx.Uniform1f(u_szk, bb_cfg.shadow_act / 100.0f);
+            gpu_pass(s, 4, vp43, vpwide);
+            gx.Uniform1f(u_szk, 1.0f);
+            gl.Disable(GL_STENCIL_TEST);
+            gl.StencilMask(0xff);
+        }
         gx.Uniform1f(u_fogD, 0.0f);
         gl.Clear(GL_DEPTH_BUFFER_BIT);
         gpu_pass(s, 0, vp43, fcull < 1.0 ? vpwide : vp43);

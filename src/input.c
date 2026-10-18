@@ -331,11 +331,30 @@ static void n1_post(void)
     jb_prev = st;
 }
 
+// отладка: журнал игрока по тикам ([live] ptrace=N — N тиков): состояние +0x17c, флаги +0x14, позиция, кнопки,
+// которые получила игра (после наших добавок аналога и буфера прыжка)
+static void pl_trace(void)
+{
+    if (bb_cfg.ptrace <= 0)
+        return;
+    bb_cfg.ptrace--;
+    uint8_t *gd = gd_ptr();
+    uint32_t P = RD32(G_PLAYER);
+    if (!P || !gd)
+        return;
+    bb_log("PT %lu st %u/%u f14 %08lx pos %ld %ld %ld A %04x C %04x E %04x raw %04x s %d,%d", (unsigned long)in_tick,
+           RD16(P + 0x17c), RD16(P + 0x17e), (unsigned long)RD32(P + 0x14), (long)(int32_t)RD32(P + 0xe4),
+           (long)(int32_t)RD32(P + 0xe8), (long)(int32_t)RD32(P + 0xec), *(uint16_t *)(gd + 0x0a),
+           *(uint16_t *)(gd + 0x0c), *(uint16_t *)(gd + 0x3e), *(uint16_t *)(gd + 0x10), *(int16_t *)(gd + 0x12),
+           *(int16_t *)(gd + 0x14));
+}
+
 // N1: вместо call PadUpdate 0x4491c0
 static void __cdecl n1_pad_update(void)
 {
     ((void (__cdecl *)(void))(uintptr_t)FN_PADUPDATE)();
     n1_post();
+    pl_trace();
 }
 
 void bb_input_log_second(void)
