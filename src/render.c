@@ -1606,9 +1606,12 @@ static int is_wide_overlay(const struct bb_snapshot *s, const struct bb_prim *p)
 
 // Варианты текстур под режимы полупрозрачности PS1 (ABR 0..3): [0x52fd74 + 48·id + 4·abr] (эмиттер 0x41493a).
 // Движок конвертирует копию текстуры под режим (0x420d90, BBLIT-Findings 306/N68) и рисует её одним SRC_ALPHA.
-// После смены уровня в таблице остаются ссылки на имена, которые новый уровень занял обычными текстурами: острова
-// на горизонте L03A (текстура 1) считались вариантом ABR 2 и пропадали за вычитанием (trace 2026-10-18). Вариант
-// делается из уже загруженной базы, поэтому принимается, только если загружен позже неё (bb_tex_seq).
+// Загрузчик (0x422e0a…0x422ec6) ставит слоту режим (word +0x52fd72 = abr 0..3 у варианта, 4 — обычная текстура) и
+// пишет ссылки база → вариант и вариант → сам себя. Текстура, которая в уровне только полупрозрачна, — вариант сама
+// себе (v == id). После смены уровня ссылки остаются на имена, которые новый уровень занял обычными текстурами:
+// острова на горизонте L03A (текстура 1) считались вариантом ABR 2 и пропадали за вычитанием (trace 2026-10-18).
+// Вариант — только с режимом слота, равным abr, и ссылкой на себя; чужой вариант (v != id) ещё и загружен позже базы.
+// Одна проверка порядка загрузки (9da14c8) отбрасывала все v == id: пол-туманность LS01 потемнела, часть пропала.
 static int8_t variant_mode[0x800];      // id текстуры → режим ABR (−1 — не вариант)
 static uint32_t variant_scan_build;
 
@@ -1624,7 +1627,10 @@ static void scan_variants(uint32_t build_id)
     for (uint32_t id = 1; id <= max; id++)
         for (int abr = 0; abr < 4; abr++) {
             uint32_t v = *(volatile uint32_t *)(uintptr_t)(0x52fd74u + 48 * id + 4 * abr);
-            if (v > 0 && v < sizeof variant_mode && bb_tex_seq[v] > bb_tex_seq[id])
+            if (v == 0 || v >= sizeof variant_mode || *(volatile int16_t *)(uintptr_t)(0x52fd72u + 48 * v) != abr ||
+                *(volatile uint32_t *)(uintptr_t)(0x52fd74u + 48 * v + 4 * abr) != v)
+                continue;
+            if (v == id || bb_tex_seq[v] > bb_tex_seq[id])
                 variant_mode[v] = (int8_t)abr;
         }
 }
@@ -3867,8 +3873,9 @@ static int render_common(const struct bb_snapshot *a, const struct bb_snapshot *
         gx.Uniform1f(u_fogD, 0.0f);
         gx.Uniform1f(u_fogS, (float)(bb_cfg.fog_start / 100.0));
         gpu_pass(s, 2, vp43, vpwide);
+        if (fog_d > 0 || gncmd[2])
+            gl.Clear(GL_DEPTH_BUFFER_BIT);   // задник не закрывает дальнее (купол L03A — и без тумана)
         if (fog_d > 0) {
-            gl.Clear(GL_DEPTH_BUFFER_BIT);   // задник не закрывает дальнее
             if (sky_copy(cw, ch))
                 gx.Uniform1f(u_fogD, (float)fog_d);
             if (fcull < 1.0)

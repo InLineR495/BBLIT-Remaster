@@ -9,6 +9,7 @@
 #include "mark.h"
 #include "glrec.h"
 #include "probe_cam.h"
+#include "remaster.h"
 #include "render.h"
 
 #define RD32(a) (*(volatile uint32_t *)(uintptr_t)(a))
@@ -53,6 +54,50 @@ int bb_part_type(uint32_t part, uint32_t *actor)
     return -1;
 }
 
+// Купол неба L03A (острова на горизонте, кольца неба, солнце — тип 14 с 0x22000000) пришит к глазу камеры, но рисовался
+// как мир: квад острова на радиусе ~12 тыс. — на расстоянии корабля — по глубине то перед корпусом, то за ним («пальма
+// на корабле», 2026-10-18). Купол — задник; признак — позиция актора (+0xe4/+0xec) на глазу [0x4b38c0] по x, z
+// DOME_LOCK построений подряд. Птеродактиль L01A (тот же тип и флаги) летает и остаётся в мире.
+#define G_EYE 0x4b38c0u
+#define DOME_NEAR 400
+#define DOME_LOCK 4
+static uint32_t dome_build;
+static struct { uint32_t actor, build; int run; } dome[8];
+static int dome_n;
+
+int bb_dome_dx(uint32_t actor, int32_t d[3])
+{
+    for (int i = 0; i < 3; i++)
+        d[i] = (int32_t)RD32(actor + 0xe4 + 4 * i) - (int32_t)RD32(G_EYE + 4 * i);
+    for (int k = 0; k < dome_n; k++)
+        if (dome[k].actor == actor)
+            return dome[k].run;
+    return 0;
+}
+
+static int dome_locked(uint32_t actor)
+{
+    int32_t d[3];
+    bb_dome_dx(actor, d);
+    int on_eye = d[0] > -DOME_NEAR && d[0] < DOME_NEAR && d[2] > -DOME_NEAR && d[2] < DOME_NEAR &&
+               (RD32(G_EYE) | RD32(G_EYE + 8));
+    int k = 0;
+    while (k < dome_n && dome[k].actor != actor)
+        k++;
+    if (k == dome_n) {
+        if (!on_eye || dome_n == 8)
+            return 0;
+        dome[dome_n].actor = actor;
+        dome[dome_n].build = dome_build - 1;
+        dome[dome_n++].run = 0;
+    }
+    if (dome[k].build != dome_build) {                  // одна проверка за построение (actor_fl зовут на каждую часть)
+        dome[k].build = dome_build;
+        dome[k].run = on_eye ? dome[k].run + 1 : 0;
+    }
+    return dome[k].run >= DOME_LOCK;
+}
+
 static uint8_t actor_fl(uint32_t actor)
 {
     if (!actor || actor < 0x10000)
@@ -66,9 +111,11 @@ static uint8_t actor_fl(uint32_t actor)
         k++;
     if (k == bb_sky_seen_n && bb_sky_seen_n < 8)
         bb_sky_seen[bb_sky_seen_n++] = actor;
-    // задник — только тип 9; тип 14 с 0x20000000 — летающие объекты без тумана (птеродактиль L01A): рисовать их первым
-    // нельзя — оказывались за дальними скалами и красили цвет дымки
-    return type == 9 ? BB_VF_NOFOG | BB_VF_SKY : BB_VF_NOFOG;
+    // задник — тип 9 и купол на глазу; летающие объекты без тумана (птеродактиль L01A) первым рисовать нельзя —
+    // оказывались за дальними скалами и красили цвет дымки
+    if (type == 9 || (dome_locked(actor) && bb_cfg.sky_dome))
+        return BB_VF_NOFOG | BB_VF_SKY;
+    return BB_VF_NOFOG;
 }
 
 // expect — функция в раскладке A (адрес слота — данные, во всех сборках один)
@@ -183,6 +230,10 @@ static void on_begin_build(int k, uint32_t *esp)
     memset(bb_pool_tag, 0, sizeof bb_pool_tag);
     memset(bb_pool_obj, 0, sizeof bb_pool_obj);
     bb_ord_n = 0;
+    if (++dome_build % 256 == 0)                        // купол другого уровня — в другом слоте; старые записи забыть
+        for (int k = dome_n - 1; k >= 0; k--)
+            if (dome_build - dome[k].build > 64)
+                dome[k] = dome[--dome_n];
     bb_fog_build_begin();
     bb_cam_on_build();
     bb_hor_build_begin(esp[0]);

@@ -12,6 +12,7 @@
 #include <string.h>
 #include "hook.h"
 #include "log.h"
+#include "mark.h"
 #include "remaster.h"
 #include "render.h"
 #include "edges.h"
@@ -171,7 +172,10 @@ int32_t __cdecl bb_ar_limit(int32_t dist, uint32_t actor)
         // поможет, а только погасит объект. Раньше за тик сбрасывались все дальние разом (L03A: 67 за тик), и мир
         // мигал: гасли и по 3 за тик проявлялись снова (2026-10-18). Теперь — только отдающие части, по одному за тик.
         if (ar_free < AR_HARD) {
-            if (!(RD32(actor + 8) & 0x1000) || ar_drops >= 1) {
+            // части отдаёт движок (0x447f87): +8 & 0x1000, части есть (+0x78), +0x70 == 0, ещё не отданы (+0x15c & 0x4000)
+            int gives = (RD32(actor + 8) & 0x1000) && RD32(actor + 0x78) && !RD32(actor + 0x70) &&
+                        !(RD32(actor + 0x15c) & 0x4000);
+            if (!gives || ar_drops >= 1) {
                 ar_far_now++;
                 ar_dump_line(actor, dist, r, lim, 1, (int)e->lost, "держится (частей мало, сброс не поможет)");
                 return lim;
@@ -256,11 +260,11 @@ static void on_part_pool(uint32_t *esp)
 {
     (void)esp;
     int cap = *(volatile int16_t *)(uintptr_t)0x4b2244u;
-    if (bb_cfg.part_extra <= 0 || cap <= 0)
+    if (bb_cfg.part_extra <= 0 || cap <= 0 || cap >= PP_MAX)
         return;
     if (!pp_buf && !(pp_buf = VirtualAlloc(NULL, (size_t)PP_MAX * 0xb8, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)))
         return;
-    int ncap = cap + bb_cfg.part_extra > PP_MAX ? PP_MAX : cap + bb_cfg.part_extra;
+    int ncap = cap + bb_cfg.part_extra < PP_MAX ? cap + bb_cfg.part_extra : PP_MAX;   // буфер на PP_MAX частей
     *(volatile uint32_t *)(uintptr_t)0x4b2240u = (uint32_t)(uintptr_t)pp_buf;
     *(volatile int16_t *)(uintptr_t)0x4b2244u = (int16_t)ncap;
     pp_cap = pp_inited = ncap;                      // следом 0x448890 готовит все ncap слотов
@@ -274,7 +278,7 @@ static void pp_keep(void)
     int cap = *(volatile int16_t *)(uintptr_t)0x4b2244u;
     if (cap <= 0 || cap == pp_cap)
         return;
-    int ncap = cap + bb_cfg.part_extra > PP_MAX ? PP_MAX : cap + bb_cfg.part_extra;
+    int ncap = cap + bb_cfg.part_extra < PP_MAX ? cap + bb_cfg.part_extra : PP_MAX;   // буфер на PP_MAX частей
     for (; pp_inited < ncap; pp_inited++) {
         memset(pp_buf + (size_t)pp_inited * 0xb8, 0, 0xb8);
         *(uint32_t *)(pp_buf + (size_t)pp_inited * 0xb8 + 4) = 1;
@@ -385,9 +389,16 @@ void bb_fog_log_second(void)
                 break;
         }
         line[len] = 0;
-        bb_log("P20 без тумана (тип 9 — задник, рисуется первым): %d акторов:%s", bb_sky_seen_n, line);
+        bb_log("P20 без тумана (задник — тип 9 и купол на глазу): %d акторов:%s", bb_sky_seen_n, line);
         memcpy(last_sky, bb_sky_seen, sizeof last_sky);
         last_sky_n = bb_sky_seen_n;
+    }
+    for (int k = 0; k < bb_sky_seen_n; k++) {         // купол неба: позиция на глазу (mark.c, dome_locked)
+        int32_t d[3];
+        int run = bb_dome_dx(bb_sky_seen[k], d);
+        if (*(volatile int16_t *)(uintptr_t)(bb_sky_seen[k] + 0x2c) != 9)
+            bb_log("P20 %08lx: позиция − глаз (%ld, %ld, %ld), на глазу %d построений", (unsigned long)bb_sky_seen[k],
+                   (long)d[0], (long)d[1], (long)d[2], run);
     }
     memset(bb_sky_seen, 0, sizeof last_sky);
     bb_sky_seen_n = 0;

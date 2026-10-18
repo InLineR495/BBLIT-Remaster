@@ -18,3 +18,4 @@ void bb_mark_init(void);           // детур C1 (сброс меток на 
 void bb_mark_install_slots(void);  // лениво из FrameTick: слоты пишет Reinit
 const char *bb_tag_name(int t);
 int bb_part_type(uint32_t part, uint32_t *actor);  // отладка: тип актора части (−1 — неизвестно)
+int bb_dome_dx(uint32_t actor, int32_t d[3]);      // позиция актора − глаз; возврат — построений подряд на глазу
