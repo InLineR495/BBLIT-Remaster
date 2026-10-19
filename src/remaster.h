@@ -1,7 +1,7 @@
 #pragma once
 #include <windows.h>
 
-#define BB_VERSION "1.0-beta"
+#define BB_VERSION "1.0-beta2"
 
 struct bb_config {
     int splash_fill; // extend uniform startup-logo backgrounds into the bars

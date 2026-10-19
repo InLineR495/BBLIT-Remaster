@@ -5,6 +5,10 @@
 > profile described below was replaced by runtime edition detection; see
 > [porting editions](porting-editions.md). The rest of this report is kept as
 > the original contributor's evidence.
+>
+> **Not yet run:** the contributor's Windows test used the earlier separate build.
+> The single-DLL build has not been run on this executable (the maintainer has no
+> copy); layout B itself is checked against the European 1.0 executable.
 
 This report concerns one executable supplied from a Spanish-language
 installation of **Bugs Bunny: Perdido en el Tiempo**. It does not establish

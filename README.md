@@ -6,7 +6,7 @@
 
 The mod is a single `ddraw.dll` plus a `remaster.ini` settings file. No game files are modified: delete `ddraw.dll` and the game is back to stock.
 
-> **Version 1.0-beta.** Tested on Linux (Steam + Proton, Legion Go 2 / Bazzite). The levels of the first era were tested thoroughly, the rest were spot-checked. Windows builds should work but haven't been tested on real hardware yet. If something goes wrong, please open an issue and attach `BIN\remaster.log`.
+> **Version 1.0-beta2.** Tested on Linux (Steam + Proton, Legion Go 2 / Bazzite). The levels of the first era were tested thoroughly, the rest were spot-checked. Windows builds should work but haven't been tested on real hardware yet. If something goes wrong, please open an issue and attach `BIN\remaster.log`.
 
 ## Before / after
 
@@ -58,8 +58,8 @@ This is not frame interpolation: nothing is guessed from finished images the way
 - No disc needed: the CD check of the European and North American releases is switched off in memory (the Russian release never had it). The game files are not modified.
 - Save slots in the main menu stay inside their panel instead of one row jumping to the screen edge.
 - Startup logos fill the whole screen with their background instead of sitting between black bars.
-- "Hey What's Up, Dock?": diving into the burrow by the floating barrels no longer throws Bugs back. The longer character draw distance had switched on the second burrow, which grabbed Bugs towards the wrong end; now it ignores the dive, as in the original.
-- Looping sounds (torch fire, fuses) no longer play forever after Bugs walks away. The original engine leaves them running at low volume until the level is reloaded; with the longer character draw distance that happened all the time. They now go quiet out of earshot and come back when Bugs returns (`fix_sfx`).
+- "Hey What's Up, Dock?": diving into the burrow by the floating barrels no longer throws Bugs back. The longer character draw distance had switched on the second burrow, which grabbed Bugs towards the wrong end; now it ignores the dive, as in the original. Beta 2 note: this is checked against the game's own condition code, but not yet confirmed by playing the dive; if it still misbehaves, set `dive_gate=0` and tell us in the issues.
+- Looping sounds (torch fire, fuses) no longer play forever after Bugs walks away. The original engine leaves them running at low volume until the level is reloaded; with the longer character draw distance that happened all the time. They now go quiet out of earshot and come back when Bugs returns (`fix_sfx`). Beta 2 note: verified by running the engine's own sound code in an emulator and by watching its voice tables in the game; not yet confirmed by ear.
 - "Hey What's Up, Dock?": the floating platform is no longer drawn as a flat decal on the ground, the sky islands and the sun no longer clash with the ship's hull in depth (no palm tree "stuck" on the ship), Bugs' shadow falls on the floating barrel, and the helm and the drawbridge no longer pop in and out at the original radius.
 
 **Handheld PCs (Linux/Proton).** On CPUs that have both fast cores and efficiency cores (such as the Z2 Extreme in the Legion Go 2), the game's main thread is pinned to the fast cores. On Windows its own scheduler handles this. On the Legion Go 2 at a 10 W TDP, this raised the heaviest scenes from 111–116 fps to 119–120 fps.
@@ -70,10 +70,10 @@ This is not frame interpolation: nothing is guessed from finished images the way
 
   | Edition | Release | `bugs.exe` SHA-256 | Tested |
   |---|---|---|---|
-  | Europe 1.0, multi-language | Infogrames disc (English, French, German, Italian, Spanish). Usually shared as `Bugs Bunny - Lost in Time [En,Fr,De,It,Es] (PC).iso` | `74ab71e175a3f186460582cf5b870c2d216ff10d7fedd683b960aa59269f1be4` | Linux / Proton |
-  | North America 1.6 | Infogrames disc (English, French, Spanish). Usually shared as `Bugs Bunny Lost in Time.iso` | `6e15f92076614e3ee218c34c5dee566bf273e5bfee77d831cfbf78aa2d29e235` | Linux / Proton |
+  | Europe 1.0, multi-language | Infogrames disc (English, French, German, Italian, Spanish). Usually shared as `Bugs Bunny - Lost in Time [En,Fr,De,It,Es] (PC).iso` | `74ab71e175a3f186460582cf5b870c2d216ff10d7fedd683b960aa59269f1be4` | Linux / Proton, short check (starts, title, a level) |
+  | North America 1.6 | Infogrames disc (English, French, Spanish). Usually shared as `Bugs Bunny Lost in Time.iso` | `6e15f92076614e3ee218c34c5dee566bf273e5bfee77d831cfbf78aa2d29e235` | Linux / Proton, short check (starts, a level) |
   | Russian 1.6 | CITY, translated by "Дядюшка Рисёч" | `7342f72443aad4f6efb366449f123dbe2baf7d45cbd1f3e8512aa70506512139` | Linux / Proton |
-  | Spanish 1.0 | "Bugs Bunny: Perdido en el Tiempo" | `3eae4e369d79a02d0b3cafeb7c5f80f6bbba7cf4ffc02a56876aaa885d5bc050` | Windows, by a contributor |
+  | Spanish 1.0 | "Bugs Bunny: Perdido en el Tiempo" | `3eae4e369d79a02d0b3cafeb7c5f80f6bbba7cf4ffc02a56876aaa885d5bc050` | Recognised, not run with this build (an earlier separate build was tried on Windows by a contributor) |
 
   All of them are 772 096 bytes. **Not sure which copy to use? Take the European or the North American disc**: they are the most common ones, and with the mod they need neither the disc nor a no-CD patch. To check your copy, run `certutil -hashfile bugs.exe SHA256` in the `BIN` folder on Windows, or `sha256sum bugs.exe` on Linux. Patched copies (no-CD cracks, other mods) have different code and are not supported; use the original `bugs.exe`. With an unsupported file, `BIN\remaster.log` contains the line "неподдерживаемый bugs.exe" ("unsupported bugs.exe"); see [Other editions](#other-editions).
 - A GPU with **OpenGL 4.6** (tested): Mesa (AMD, Intel) on Linux, or a current AMD, NVIDIA or Intel driver on Windows. Older drivers down to OpenGL 3.3 should also work.
@@ -88,7 +88,7 @@ This is not frame interpolation: nothing is guessed from finished images the way
 
 Some copies of the disc image are raw CD images (2352-byte sectors) despite the `.iso` name, and archive managers or `mount` cannot open them. Convert such an image first, for example with `iat image.iso fixed.iso` (package `iat`).
 
-Download `BBLIT-Remaster-1.0-beta.zip` from [Releases](../../releases) and extract it into the game folder. `ddraw.dll` and `remaster.ini` must end up in the `BIN` folder, next to `bugs.exe`.
+Download `BBLIT-Remaster-1.0-beta2.zip` from [Releases](../../releases) and extract it into the game folder. `ddraw.dll` and `remaster.ini` must end up in the `BIN` folder, next to `bugs.exe`.
 
 Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these arguments: `/opengl /win /b0 /x800 /y600`.
 - `/opengl` selects the engine's OpenGL mode; the mod only works in it.
@@ -111,7 +111,7 @@ Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these ar
 
 ### Windows
 
-> Tested on Windows by a contributor with the Spanish edition. If you try it, please report how it went in the issues.
+> Not tested with this build. A contributor tried an earlier, separate Spanish build on Windows. If you try it, please report how it went in the issues.
 
 1. Copy `ddraw.dll` and `remaster.ini` into the game's `BIN` folder.
 2. Create a shortcut to `BIN\bugs.exe` and add the arguments after the quotes in the shortcut's "Target" field:
@@ -129,7 +129,7 @@ Run **`BIN\bugs.exe` directly**, not the `BugsBunny.exe` launcher, with these ar
 
 ### Checking that it works
 
-After launch, `remaster.log` appears in `BIN`, and its first lines contain `BBLIT Remaster 1.0-beta`. The picture fills the whole wide screen, and the right stick turns the camera.
+After launch, `remaster.log` appears in `BIN`, and its first lines contain `BBLIT Remaster 1.0-beta2`. The picture fills the whole wide screen, and the right stick turns the camera.
 
 ### Uninstalling
 
@@ -175,7 +175,7 @@ The main settings live in `BIN\remaster.ini` and are commented there. The `[live
 
 - Textures are the original ones, with no replacement or upscaling.
 - At a low TDP, the heaviest scenes occasionally (about once per second) repeat one frame.
-- Windows has only been tested by a contributor, with the Spanish edition.
+- Windows has not been tested with this build (a contributor tried an earlier, separate Spanish build there).
 - Only the editions listed under [Requirements](#requirements) are supported.
 
 ## Other editions
