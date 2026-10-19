@@ -21,8 +21,17 @@
 // старт 0x41ef5b. Стоп владельца и автостоп видят голос (0x8000) и снимают его штатно. 2 — только штатный стоп: 0x8002
 // вместо 0x0002 (стоковый key-off в следующем тике), без возврата при подходе.
 // Условия логики 0x55/0x57 («играет» = флаги & 5) у спящего такие же, как у сироты: «не играет».
+// Повторные запросы. Скрипты и анимации просят зацикленный звук снова и снова (L05A2: звук 88 у одного владельца каждые
+// ~0,2 с), а SndCmd 0x41deb0 дублей (владелец, звук) не ищет — каждый запрос занимает новый голос. В стоке лишний голос
+// усыновляет запись петли и освобождается при key-off; у «спящего» он бы остался ещё одним спящим (потолок SLEEP_MAX
+// забивался одним владельцем, слоты голосов кончались, новые разовые звуки терялись, а после потолка каждый повтор давал
+// Play на минимуме и Stop в следующем тике). Поэтому: (1) на каждый (владелец, сэмпл) — не больше одного спящего: key-off
+// дубля отдаёт его голос (on_keyoff); (2) запрос, пришедший при спящем двойнике вне слышимости, гасится до старта
+// (pre_tick, до стокового обновления), а в слышимости — заменяет спящего и стартует как в стоке; (3) если свободных голосов
+// меньше SLOT_RESERVE, спящие уступают места (разовым звукам нужны слоты, SndCmd при 24/24 молча отбрасывает запрос).
 // Адреса — раскладка A; в B весь модуль сдвинут на +0x80 (BB_CODES, сверено выравниванием 2905 инструкций). Проверено на
-// настоящем коде движка RU 1.6 и EU 1.0 в эмуляторе (DirectSound — заглушка), на устройстве — нет.
+// настоящем коде движка RU 1.6 и EU 1.0 в эмуляторе (re/scripts/emu: s2..s6, fuzz, lock_real, dfz5; DirectSound — заглушка);
+// на устройстве — только по таблицам голосов (чтение памяти игры), на слух и под реальным DirectSound/Wine — нет.
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
@@ -59,6 +68,7 @@
 #define M_VOICE 1               // виртуальный голос (по умолчанию)
 #define M_STOP  2               // только штатный стоп
 #define SLEEP_MAX  10           // спящих голосов не больше: 24 слота нужны и разовым звукам
+#define SLOT_RESERVE 3          // свободных голосов держим про запас: меньше — спящие освобождаются (SndCmd при 24/24 отбрасывает звук)
 #define WAKE_VOL   8            // подъём при громкости ≥ 8 (≈ на 250 ед. ближе границы 4064): без дребезга на границе
 
 // Регистры из заглушки: pushal + pushfl, указатель — на флаги.
@@ -68,7 +78,8 @@ static struct {
     uint32_t keyoff, keyoff_loop;                   // 0x41f3d4 сработал / у голоса была живая петля
     uint32_t orphan, stopped, slept, woke, dropped; // сирот создано (fix=0) / штатных стопов / уснуло / проснулось / спящих снято
     uint32_t resets, purged;
-    uint32_t sec_keyoff, sec_orphan, sec_slept, sec_stopped, sec_woke;   // то же за секунду (P32)
+    uint32_t merged, replaced, evicted;             // дублей спящего отдано/погашено / спящих заменено новым запросом / уступило место голосам
+    uint32_t sec_keyoff, sec_orphan, sec_slept, sec_stopped, sec_woke, sec_merged;   // то же за секунду (P32)
 } st;
 static int installed;                               // сайты поставлены
 
@@ -149,12 +160,36 @@ static int orphans(int kill)
     return found;
 }
 
+static int is_sleeper(uint32_t v)
+{
+    return (RD16(v) & (F_USED | 0xff)) == (F_USED | F_SLEEP);
+}
+
 static int sleepers(void)
 {
     int n = 0;
     for (int k = 0; k < S_NSLOTS; k++)
-        n += RD16(S_SLOTS + S_SLOT_SZ * k) == (F_USED | F_SLEEP);
+        n += is_sleeper(S_SLOTS + S_SLOT_SZ * k);
     return n;
+}
+
+static int free_slots(void)
+{
+    int n = 0;
+    for (int k = 0; k < S_NSLOTS; k++)
+        n += !(RD16(S_SLOTS + S_SLOT_SZ * k) & F_USED);
+    return n;
+}
+
+// Другой спящий голос той же петли — того же (владелец, сэмпл), что и у голоса except; 0 — нет.
+static uint32_t sleeper_twin(uint32_t owner, uint32_t smp, uint32_t except)
+{
+    for (int k = 0; k < S_NSLOTS; k++) {
+        uint32_t s = S_SLOTS + S_SLOT_SZ * k;
+        if (s != except && is_sleeper(s) && RD32(s + 4) == owner && RD32(s + 8) && def_sample(RD32(s + 8)) == smp)
+            return s;
+    }
+    return 0;
 }
 
 static int owner_alive(uint32_t owner)                    // ActorFree 0x447a50 ставит у актора +4 = 1
@@ -172,6 +207,7 @@ static void __cdecl on_keyoff(struct regs *r)
 {
     uint32_t v = r->esi, owner = RD32(v + 4), def = RD32(v + 8);
     int k = loop_find(r->edi & 0xffff, owner), mode = bb_cfg.fix_sfx;
+    uint32_t twin = 0;
     const char *act;
     st.keyoff++;
     st.sec_keyoff++;
@@ -183,13 +219,21 @@ static void __cdecl on_keyoff(struct regs *r)
             st.sec_orphan++;
         }
         act = k >= 0 ? "сирота (как в оригинале)" : "голос свободен";
-    } else if (mode == M_VOICE && owner_alive(owner) && group_ok(v) && sleepers() < SLEEP_MAX) {
+    } else if (mode == M_VOICE && owner_alive(owner) && group_ok(v) &&
+               ((twin = sleeper_twin(owner, r->edi & 0xffff, v)) || sleepers() < SLEEP_MAX)) {
         if (k >= 0)
             loop_stop(k);
-        WR16(v, F_USED | F_SLEEP);
-        st.slept++;
-        st.sec_slept++;
-        act = "стоп и сон";
+        if (twin) {                                        // у петли уже есть спящий голос: этот дубль не нужен
+            WR16(v, 0);
+            st.merged++;
+            st.sec_merged++;
+            act = "стоп, голос отдан (спящий двойник уже есть)";
+        } else {
+            WR16(v, F_USED | F_SLEEP);
+            st.slept++;
+            st.sec_slept++;
+            act = "стоп и сон";
+        }
     } else {
         WR16(v, F_USED | F_STOP);                          // штатный стоп в следующем тике
         st.stopped++;
@@ -199,6 +243,12 @@ static void __cdecl on_keyoff(struct regs *r)
     if (st.keyoff <= 40)
         bb_log("SFX: вне слышимости: звук %u, владелец %08lx (тип %d), петля %s — %s", def ? RD16(def) : 0, (unsigned long)owner,
                owner ? (int)(int16_t)RD16(owner + 0x2c) : -1, k >= 0 ? "была" : "нет", act);
+}
+
+static int wake_vol(uint32_t owner, uint32_t def, uint16_t *lr)       // громкость в слышимости: L или R ≥ WAKE_VOL
+{
+    *lr = ((uint16_t (__cdecl *)(uint32_t, uint32_t))(uintptr_t)BB_CODE(0x41f620u))(owner, def);
+    return (*lr & 0xff) >= WAKE_VOL || (*lr >> 8) >= WAKE_VOL;
 }
 
 // --- 0x41f2e1: je 0x41f3d9 («не играет, не старт, не стоп») — сюда попадает спящий голос ---
@@ -213,8 +263,8 @@ static void __cdecl on_idle(struct regs *r)
         st.dropped++;
         return;
     }
-    uint16_t lr = ((uint16_t (__cdecl *)(uint32_t, uint32_t))(uintptr_t)BB_CODE(0x41f620u))(owner, def);
-    if ((lr & 0xff) >= WAKE_VOL || (lr >> 8) >= WAKE_VOL) {
+    uint16_t lr;
+    if (wake_vol(owner, def, &lr)) {
         WR16(v, F_USED | F_START);                          // стоковый старт 0x41ef5b: громкость, запись в 0x553200, Play
         st.woke++;
         st.sec_woke++;
@@ -234,11 +284,46 @@ static void on_init(uint32_t *esp)
     st.resets++;
 }
 
-// --- 0x41edb0: раз в тик (30 Гц), до стокового обновления голосов: переключение режима на лету ---
+// Повторные запросы петли, пока у неё есть спящий голос (звук 88 у одного владельца каждые ~0,2 с): новый голос ждёт
+// старта (0x8001). Вне слышимости — гасится до стокового старта (иначе Play на минимуме и Stop в следующем тике, а
+// спящий остался бы ещё и с дублем); в слышимости — заменяет спящего, дальше стоковый старт. Затем, если свободных
+// голосов меньше SLOT_RESERVE, спящие освобождаются (они вернутся, только если скрипт повторит запрос).
+static void pre_tick(void)
+{
+    for (int k = 0; k < S_NSLOTS; k++) {
+        uint32_t v = S_SLOTS + S_SLOT_SZ * k, owner = RD32(v + 4), def = RD32(v + 8), twin;
+        uint16_t lr;
+        if ((RD16(v) & (F_USED | 0xff)) != (F_USED | F_START) || !def || !(RD8(def + 4) & 0x20) || !owner_alive(owner) ||
+            !group_ok(v))
+            continue;
+        twin = sleeper_twin(owner, def_sample(def), v);
+        if (!twin)
+            continue;
+        if (wake_vol(owner, def, &lr)) {
+            WR16(twin, 0);                                  // стартует новый запрос, спящий не нужен
+            st.replaced++;
+        } else {
+            WR16(v, 0);                                     // дубль запроса вдали: спящий уже ждёт
+            st.merged++;
+            st.sec_merged++;
+        }
+    }
+    for (int k = 0; k < S_NSLOTS && free_slots() < SLOT_RESERVE; k++) {
+        uint32_t v = S_SLOTS + S_SLOT_SZ * k;
+        if (is_sleeper(v)) {
+            WR16(v, 0);
+            st.evicted++;
+        }
+    }
+}
+
+// --- 0x41edb0: раз в тик (30 Гц), до стокового обновления голосов: спящие и переключение режима на лету ---
 static void on_tick(uint32_t *esp)
 {
     static int last_mode = -1;
     int mode = bb_cfg.fix_sfx;
+    if (mode == M_VOICE)
+        pre_tick();
     if (mode == last_mode)
         return;
     if (last_mode == M_OFF && orphans(1))                      // fix_sfx включили на лету: сирот прошлого режима снять разом
@@ -253,14 +338,16 @@ void bb_sfx_log_second(void)
 {
     if (installed) {
         int orph = orphans(0), sl = sleepers();
-        if (st.sec_keyoff || orph || sl || st.sec_woke)
-            bb_log("P32 звук fix_sfx=%d: петель %lu, сирот %d, спящих %d | за с: вне слышимости %lu (сирот создано %lu, уснуло %lu, "
-                   "штатный стоп %lu), проснулось %lu | всего: сирот снято %lu, спящих сброшено %lu, сбросов звука %lu",
-                   bb_cfg.fix_sfx, (unsigned long)RD32(S_NLOOPS), orph, sl, (unsigned long)st.sec_keyoff,
+        if (st.sec_keyoff || orph || sl || st.sec_woke || st.sec_merged)
+            bb_log("P32 звук fix_sfx=%d: петель %lu, сирот %d, спящих %d, голосов свободно %d | за с: вне слышимости %lu (сирот создано "
+                   "%lu, уснуло %lu, штатный стоп %lu), проснулось %lu, дублей отдано %lu | всего: сирот снято %lu, спящих сброшено "
+                   "%lu, сбросов звука %lu, заменено новым запросом %lu, уступило голоса %lu",
+                   bb_cfg.fix_sfx, (unsigned long)RD32(S_NLOOPS), orph, sl, free_slots(), (unsigned long)st.sec_keyoff,
                    (unsigned long)st.sec_orphan, (unsigned long)st.sec_slept, (unsigned long)st.sec_stopped,
-                   (unsigned long)st.sec_woke, (unsigned long)st.purged, (unsigned long)st.dropped, (unsigned long)st.resets);
+                   (unsigned long)st.sec_woke, (unsigned long)st.sec_merged, (unsigned long)st.purged, (unsigned long)st.dropped,
+                   (unsigned long)st.resets, (unsigned long)st.replaced, (unsigned long)st.evicted);
     }
-    st.sec_keyoff = st.sec_orphan = st.sec_slept = st.sec_stopped = st.sec_woke = 0;
+    st.sec_keyoff = st.sec_orphan = st.sec_slept = st.sec_stopped = st.sec_woke = st.sec_merged = 0;
 }
 
 void bb_sfx_dump(void)
