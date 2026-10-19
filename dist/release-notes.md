@@ -6,8 +6,8 @@ Second beta of Bugs Bunny: Lost in Time on a modern renderer. It replaces 1.0-be
 - HUD counters stay within a 16:9 frame on ultrawide screens (`hud_aspect`); startup logos fill the whole screen; save slots in the main menu stay inside their panel.
 - "Hey What's Up, Dock?": no palm tree "stuck" on the ship, the floating platform is drawn as ground, Bugs' shadow falls on the barrel, and the helm and the drawbridge no longer pop in and out.
 - Characters at the longer draw distance: the world is kept whole at level start, without mass pop-out (bigger part pool, `part_extra`).
-- Burrows in the docks level: diving into the burrow by the floating barrels should no longer throw Bugs back (`dive_gate`). Checked against the game's own condition code, not yet confirmed by playing the dive; `dive_gate=0` switches it off.
-- Looping sounds (torch fire, fuses) no longer play forever after Bugs walks away (`fix_sfx`). Verified by running the engine's own sound code in an emulator and by watching its voice tables in the game, not yet confirmed by ear; `fix_sfx=0` switches it off.
+- Burrows in the docks level: diving into the burrow by the floating barrels no longer throws Bugs back (`dive_gate`; `dive_gate=0` switches it off).
+- Looping sounds (torch fire, fuses) no longer play forever after Bugs walks away (`fix_sfx`; `fix_sfx=0` switches it off).
 
 **What's in it**
 - Any refresh rate (60/120/144 Hz) at the correct game speed: logic stays at its native 30 ticks, and the frames in between are drawn from the game's own geometry with movement, camera and animation interpolated. This is not frame generation: no images are guessed, physics and the rest of the game logic are untouched.
